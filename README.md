@@ -298,3 +298,5 @@ Detailed architecture specifications are located in [`docs/`](file:///c:/Users/g
 - [API Specification](file:///c:/Users/gilab/OneDrive/Desktop/esp%20studio/docs/API_SPECIFICATION.md)
 - [Testing Strategy](file:///c:/Users/gilab/OneDrive/Desktop/esp%20studio/docs/TESTING_STRATEGY.md)
 - [Development Roadmap](file:///c:/Users/gilab/OneDrive/Desktop/esp%20studio/docs/DEVELOPMENT_ROADMAP.md)
+#   E S P - c o d e - S t u d i o  
+ 
