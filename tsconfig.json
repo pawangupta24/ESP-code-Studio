@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false
+  },
+  "include": [],
+  "references": [
+    { "path": "./packages/shared-types" },
+    { "path": "./packages/protocol" },
+    { "path": "./packages/project-core" },
+    { "path": "./packages/device-core" },
+    { "path": "./packages/serial-core" },
+    { "path": "./packages/build-core" },
+    { "path": "./packages/flash-core" },
+    { "path": "./packages/sync-core" },
+    { "path": "./packages/editor" },
+    { "path": "./packages/ui" },
+    { "path": "./apps/web" }
+  ]
+}

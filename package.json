@@ -1,0 +1,24 @@
+{
+  "name": "esp-studio-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ESP Studio - Hybrid Embedded Development Platform for ESP32",
+  "author": "ESP Studio Team",
+  "license": "Apache-2.0",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm --workspace=@esp-studio/web run dev",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "tsc --noEmit",
+    "desktop:dev": "npm --workspace=@esp-studio/desktop run dev",
+    "desktop:build": "npm --workspace=@esp-studio/desktop run build",
+    "package:zip": "node ./scripts/package-zip.js"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5"
+  }
+}
