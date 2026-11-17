@@ -29,6 +29,7 @@ import { CommandPalette } from './components/CommandPalette';
 import { AiAssistantPanel } from './components/AiAssistantPanel';
 import { LibraryManager } from './components/LibraryManager';
 import { useWorkspaceStore, NavTab } from './stores/useWorkspaceStore';
+import { pickColorTheme, pickLanguageMode } from './quickPicks';
 import { THEME_PALETTES } from './themeTokens';
 import {
   Terminal,
@@ -108,11 +109,46 @@ export const App: React.FC = () => {
 
   // Global shortcuts. Capture phase so they win over Monaco's own bindings for the same keys
   // (e.g. Ctrl+U), matching what the menus and Keyboard Shortcuts page advertise.
+  const chordUntil = useRef(0);
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
       const s = stateRef.current;
       const k = e.key.toLowerCase();
+      const ctrl = e.ctrlKey || e.metaKey;
+      const consume = (fn: () => void) => {
+        e.preventDefault();
+        e.stopPropagation();
+        fn();
+      };
+
+      // Ctrl+K chords outside the editor. Inside it, Monaco resolves them (see MonacoEditor.tsx).
+      const inEditor = !!(e.target as Element | null)?.closest?.('.monaco-editor');
+      if (!inEditor && Date.now() < chordUntil.current && !['control', 'meta', 'shift', 'alt'].includes(k)) {
+        chordUntil.current = 0;
+        const chord: Record<string, string> = ctrl
+          ? { s: 'keybindings', t: 'colorTheme' }
+          : { z: 'zenMode', m: 'languageMode' };
+        if (chord[k]) return consume(() => runCommand(chord[k]));
+        return;
+      }
+      if (!inEditor && ctrl && !e.shiftKey && !e.altKey && k === 'k') {
+        chordUntil.current = Date.now() + 1500;
+        return;
+      }
+
+      // Keys without Ctrl
+      if (!ctrl) {
+        if (k === 'escape' && s.zenMode && !s.isCommandPaletteOpen) return consume(actions.toggleZenMode);
+        if (k === 'f5' && !e.shiftKey) return consume(() => void actions.toggleSerialConnection());
+        if (k === 'f11') return consume(actions.toggleFullScreen);
+        if (e.altKey && !e.shiftKey && k === 'z') return consume(() => actions.setEditorSettings({ wordWrap: !s.editorSettings.wordWrap }));
+        return;
+      }
+      if (e.altKey) {
+        if (k === 'n') consume(() => actions.newUntitledFile());
+        return;
+      }
+
       const tabStep = (delta: number) => {
         const n = s.openTabs.length;
         if (n > 1) actions.setActiveFilePath(s.openTabs[(s.openTabs.indexOf(s.activeFilePath) + delta + n) % n]);
@@ -126,11 +162,13 @@ export const App: React.FC = () => {
         x: () => actions.setSidebarView('extensions'),
         m: () => actions.setBottomPanelTab('problems'),
         a: actions.toggleAiPanel,
-        o: () => actions.setActiveNavTab('ota'),
+        b: () => void actions.triggerBuild(),
         s: actions.saveAllFiles,
+        '~': () => actions.setBottomPanelTab('terminal'),
       };
       const plain: Record<string, () => void> = {
-        ',': () => actions.setActiveNavTab('settings'),
+        ',': () => actions.openSettings(),
+        o: () => window.dispatchEvent(new Event('esp-studio:open-file')),
         s: () => actions.saveFile(),
         b: () => void actions.triggerBuild(),
         u: () => void actions.triggerFlash(),
@@ -147,14 +185,26 @@ export const App: React.FC = () => {
       };
 
       const handler = (e.shiftKey ? shifted : plain)[k];
-      if (handler) {
-        e.preventDefault();
-        e.stopPropagation();
-        handler();
-      }
+      if (handler) consume(handler);
     };
+    // Named commands, shared by the chord handler above and Monaco's in-editor chords
+    const runCommand = (name: string) => {
+      const s = stateRef.current;
+      if (name === 'languageMode') pickLanguageMode(s, actions);
+      else if (name === 'colorTheme') pickColorTheme(s, actions);
+      else if (name === 'zenMode') actions.toggleZenMode();
+      else if (name === 'keybindings') actions.openSettings('keybindings');
+    };
+    const onCommand = (e: Event) => runCommand((e as CustomEvent<string>).detail);
+    const onFullScreen = () => actions.setFullScreenState(!!document.fullscreenElement);
     window.addEventListener('keydown', handleKeyDown, true);
-    return () => window.removeEventListener('keydown', handleKeyDown, true);
+    window.addEventListener('esp-studio:command', onCommand);
+    document.addEventListener('fullscreenchange', onFullScreen);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+      window.removeEventListener('esp-studio:command', onCommand);
+      document.removeEventListener('fullscreenchange', onFullScreen);
+    };
   }, []);
 
   // Opening the marketplace from anywhere also shows its sidebar list
@@ -269,7 +319,11 @@ export const App: React.FC = () => {
     window.addEventListener('mouseup', onMouseUp);
   };
 
-  const hasSidebar = SIDEBAR_VIEWS.includes(activityView);
+  // Zen mode hides everything except the editor and menu bar (Esc or Ctrl+K Z to leave)
+  const zen = state.zenMode;
+  const hasSidebar = !zen && SIDEBAR_VIEWS.includes(activityView);
+  const showActivityBar = !zen && state.editorSettings.showActivityBar;
+  const showPanel = !zen && state.bottomPanelTab !== 'closed';
 
   // Bottom panel maximize toggle
   const toggleMaximizePanel = () => {
@@ -294,7 +348,7 @@ export const App: React.FC = () => {
       {/* Main VS Code Workspace Body */}
       <div className="flex-1 flex overflow-hidden relative">
         {/* Leftmost Activity Bar */}
-        <ActivityBar
+        {showActivityBar && <ActivityBar
           activeView={activityView}
           onSelectView={(v) => {
             if (v === 'settings') {
@@ -309,7 +363,7 @@ export const App: React.FC = () => {
               else if (v === 'extensions') actions.setActiveNavTab('extensions');
             }
           }}
-        />
+        />}
 
         {/* Dynamic Resizable Sidebar Container */}
         {hasSidebar && (
@@ -437,7 +491,7 @@ export const App: React.FC = () => {
               </div>
 
               {/* Bottom Panel Vertical Splitter Handle */}
-              {state.bottomPanelTab !== 'closed' && (
+              {showPanel && (
                 <div
                   onMouseDown={handleBottomResizeStart}
                   onDoubleClick={() => setBottomPanelHeight(240)}
@@ -447,7 +501,7 @@ export const App: React.FC = () => {
               )}
 
               {/* Bottom Docked Panel (Terminal, Problems, Output, Serial, Plotter) */}
-              {state.bottomPanelTab !== 'closed' && (
+              {showPanel && (
                 <div
                   style={{
                     backgroundColor: palette.bgSidebar,
@@ -562,7 +616,7 @@ export const App: React.FC = () => {
       </div>
 
       {/* Bottom VS Code Status Bar */}
-      <StatusBar cursorLine={cursorPos.line} cursorCol={cursorPos.col} />
+      {!zen && state.editorSettings.showStatusBar && <StatusBar cursorLine={cursorPos.line} cursorCol={cursorPos.col} />}
 
       {/* Sync Dialog Modal */}
       <SyncModal />

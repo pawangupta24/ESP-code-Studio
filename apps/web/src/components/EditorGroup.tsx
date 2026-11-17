@@ -115,7 +115,7 @@ export const EditorGroup: React.FC<EditorGroupProps> = ({
       className="flex-1 flex flex-col h-full overflow-hidden select-none font-mono text-xs"
     >
       {/* Editor Tabs Bar */}
-      <div
+      {state.editorSettings.showTabs && <div
         style={{ backgroundColor: palette.bgSidebar, borderColor: palette.border }}
         className="h-9 border-b flex items-center justify-between overflow-x-auto select-none"
       >
@@ -199,14 +199,14 @@ export const EditorGroup: React.FC<EditorGroupProps> = ({
           )}
 
           <button
-            onClick={actions.formatCurrentCode}
+            onClick={() => void actions.formatCurrentCode()}
             className="p-1 rounded hover:bg-white/10 text-amber-400 hover:text-amber-300"
             title="Format Document (Shift+Alt+F)"
           >
             <Sparkles className="w-3.5 h-3.5" />
           </button>
         </div>
-      </div>
+      </div>}
 
       {/* Recommended Extension Prompt Banner (VS Code Style) */}
       {matchingExt && !matchingExt.installed && (
@@ -236,7 +236,7 @@ export const EditorGroup: React.FC<EditorGroupProps> = ({
       )}
 
       {/* Breadcrumb Navigation */}
-      <div
+      {state.editorSettings.showBreadcrumbs && file && <div
         style={{ backgroundColor: palette.bgMain, borderColor: palette.border }}
         className="h-7 border-b px-3 flex items-center justify-between text-[11px] text-[#8b949e]"
       >
@@ -258,7 +258,7 @@ export const EditorGroup: React.FC<EditorGroupProps> = ({
           <span>•</span>
           <span>{state.activeDevice.chipFamily}</span>
         </div>
-      </div>
+      </div>}
 
       {/* Primary Viewer Area */}
       <div className="flex-1 flex overflow-hidden relative">

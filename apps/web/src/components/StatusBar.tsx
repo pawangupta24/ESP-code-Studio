@@ -3,6 +3,8 @@ import { useWorkspaceStore } from '../stores/useWorkspaceStore';
 import { THEME_PALETTES } from '../themeTokens';
 import { getDefaultSerialPort } from '../utils/platform';
 import { runEditorAction } from '../editorBridge';
+import { detectLanguage, languageName } from '../languages';
+import { pickColorTheme, pickLanguageMode, pickTabSize } from '../quickPicks';
 import {
   GitBranch,
   AlertCircle,
@@ -25,19 +27,8 @@ export const StatusBar: React.FC<StatusBarProps> = ({ cursorLine = 1, cursorCol 
   const errorCount = state.codeDiagnostics.filter((d) => d.severity === 'error').length;
   const warningCount = state.codeDiagnostics.filter((d) => d.severity === 'warning').length;
 
-  const activeExt = '.' + (state.activeFilePath.split('.').pop() || '').toLowerCase();
-  const getLanguageLabel = () => {
-    if (activeExt === '.py') return 'MicroPython (ESP32)';
-    if (activeExt === '.rs' || activeExt === '.toml') return 'Rust (esp-rs)';
-    if (activeExt === '.js' || activeExt === '.mjs') return 'JavaScript (QuickJS)';
-    if (activeExt === '.ini') return 'PlatformIO INI';
-    if (activeExt === '.json') return 'JSON Schema';
-    if (activeExt === '.md') return 'Markdown';
-    if (activeExt === '.pdf') return 'PDF Document';
-    if (activeExt === '.csv') return 'CSV Spreadsheet';
-    if (activeExt === '.bin' || activeExt === '.hex' || activeExt === '.elf') return 'Firmware Binary';
-    return 'C/C++ (ESP32-S3)';
-  };
+  const path = state.activeFilePath;
+  const languageLabel = path ? languageName(detectLanguage(path, state.languageOverrides[path])) : '';
 
   return (
     <div
@@ -111,7 +102,9 @@ export const StatusBar: React.FC<StatusBarProps> = ({ cursorLine = 1, cursorCol 
         </button>
 
         {/* Indentation */}
-        <span className="hidden md:inline">Spaces: {state.editorSettings.tabSize}</span>
+        <button onClick={() => pickTabSize(state, actions)} className="hidden md:inline hover:text-white" title="Select Indentation">
+          Spaces: {state.editorSettings.tabSize}
+        </button>
 
         {/* Encoding */}
         <span className="hidden md:inline">UTF-8</span>
@@ -120,17 +113,21 @@ export const StatusBar: React.FC<StatusBarProps> = ({ cursorLine = 1, cursorCol 
         <span className="hidden md:inline">LF</span>
 
         {/* Language Mode */}
-        <button
-          onClick={() => actions.setActiveNavTab('extensions')}
-          style={{ color: palette.accent }}
-          className="hover:underline hidden sm:flex items-center space-x-1"
-          title="Select Language Mode or Install Extensions"
-        >
-          <span>{getLanguageLabel()}</span>
-        </button>
+        {path && (
+          <button
+            onClick={() => pickLanguageMode(state, actions)}
+            style={{ color: palette.accent }}
+            className="hover:underline hidden sm:flex items-center space-x-1"
+            title="Select Language Mode (Ctrl+K M)"
+          >
+            <span>{languageLabel}</span>
+          </button>
+        )}
 
         {/* Theme Name */}
-        <span style={{ color: palette.accent }} className="hidden lg:inline">{palette.name}</span>
+        <button onClick={() => pickColorTheme(state, actions)} style={{ color: palette.accent }} className="hidden lg:inline hover:underline" title="Color Theme (Ctrl+K Ctrl+T)">
+          {palette.name}
+        </button>
 
         {/* Ready Badge */}
         <span className="text-emerald-400 hidden sm:flex items-center space-x-1">

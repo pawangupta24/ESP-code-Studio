@@ -73,7 +73,12 @@ export const ImagePreview: React.FC<ImagePreviewProps> = ({ content, filePath })
           className="max-w-2xl max-h-[500px] border border-[#30363d] rounded-xl shadow-2xl p-4 bg-[#0d1117] flex items-center justify-center"
         >
           {isSvg ? (
-            <div dangerouslySetInnerHTML={{ __html: content }} className="w-full h-full flex items-center justify-center" />
+            // <img> renders SVG without running embedded scripts/handlers (innerHTML would run onload=... from imported files)
+            <img
+              src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(content)}`}
+              alt={fileName}
+              className="max-w-full max-h-full"
+            />
           ) : (
             <div className="text-center p-8 text-[#8b949e]">
               <ImageIcon className="w-12 h-12 mx-auto mb-2 text-purple-400" />

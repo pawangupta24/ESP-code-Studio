@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useWorkspaceStore, ThemeName } from '../stores/useWorkspaceStore';
-import { THEME_PALETTES } from '../themeTokens';
+import { useWorkspaceStore } from '../stores/useWorkspaceStore';
 import { runEditorAction, requestReveal } from '../editorBridge';
+import { pickColorTheme, pickLanguageMode, pickNewFileLanguage, pickTabSize } from '../quickPicks';
+import { Check } from 'lucide-react';
 import { FileIcon } from './FileIcon';
 import {
   Terminal, Cpu, Zap, Cloud, Trash2, Code, RotateCcw, Blocks, Save, X, Columns2, Bot,
@@ -14,17 +15,26 @@ interface PaletteItem {
   detail: string;
   icon?: React.FC<{ className?: string }>;
   fileName?: string;
+  checked?: boolean;
   run: () => void;
 }
 
-/** 0 = substring hit, 1 = in-order character hit, -1 = no match. Lower sorts first. */
+/**
+ * Match quality, lower sorts first: 0 exact, 1 prefix, 2 word starts with query,
+ * 3 substring, 4 in-order characters, -1 no match. So "go" ranks "Go" above "Cameligo".
+ */
 export function fuzzyScore(text: string, query: string): number {
   const t = text.toLowerCase();
   const q = query.toLowerCase();
-  if (!q || t.includes(q)) return 0;
+  if (!q) return 0;
+  const firstWord = t.split(/\s+/)[0];
+  if (firstWord === q) return 0;
+  if (t.startsWith(q)) return 1;
+  if (new RegExp(`[\\s/._(-]${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(t)) return 2;
+  if (t.includes(q)) return 3;
   let i = 0;
   for (const ch of t) if (ch === q[i]) i++;
-  return i === q.length ? 1 : -1;
+  return i === q.length ? 4 : -1;
 }
 
 function rank<T>(items: T[], query: string, text: (item: T) => string): T[] {
@@ -66,7 +76,7 @@ export const CommandPalette: React.FC = () => {
       setSearch(state.paletteQuery);
       setSelectedIndex(0);
     }
-  }, [state.isCommandPaletteOpen, state.paletteQuery]);
+  }, [state.isCommandPaletteOpen, state.paletteQuery, state.quickPick]);
 
   useEffect(() => {
     listRef.current?.children[selectedIndex]?.scrollIntoView({ block: 'nearest' });
@@ -77,10 +87,20 @@ export const CommandPalette: React.FC = () => {
   const commands: PaletteItem[] = [
     { id: 'goto-file', title: 'Go to File...', detail: 'Quick open any workspace file (Ctrl+P)', icon: Search, run: () => actions.setCommandPaletteOpen(true, '') },
     { id: 'goto-line', title: 'Go to Line/Column...', detail: 'Jump to a line in the active file (Ctrl+G)', icon: Hash, run: () => actions.setCommandPaletteOpen(true, ':') },
-    { id: 'new-file', title: 'File: New File...', detail: 'Create a file in the workspace', icon: FilePlus, run: () => {
-      const name = prompt('New file path (e.g. src/sensors.h):');
-      if (name?.trim()) actions.createFile(name.trim());
-    } },
+    { id: 'new-text-file', title: 'File: New Text File', detail: 'Untitled file in the default language (Ctrl+Alt+N)', icon: FilePlus, run: () => actions.newUntitledFile() },
+    { id: 'new-file', title: 'File: New File...', detail: 'Pick a language for a new file', icon: FilePlus, run: () => pickNewFileLanguage(actions) },
+    { id: 'revert', title: 'File: Revert File', detail: 'Discard changes since the last save', icon: RotateCcw, run: () => actions.revertFile() },
+    { id: 'auto-save', title: 'File: Toggle Auto Save', detail: `Currently ${state.editorSettings.autoSave}`, icon: Save, run: () => actions.setEditorSettings({ autoSave: state.editorSettings.autoSave === 'off' ? 'afterDelay' : 'off' }) },
+    { id: 'language-mode', title: 'Change Language Mode', detail: 'Pick the language for the current file (Ctrl+K M)', icon: Code, run: () => pickLanguageMode(state, actions) },
+    { id: 'indent', title: 'Indent Using Spaces', detail: `Tab size: ${state.editorSettings.tabSize}`, icon: Code, run: () => pickTabSize(state, actions) },
+    { id: 'symbol', title: 'Go to Symbol in Editor...', detail: 'Functions and classes in this file (Ctrl+Shift+O)', icon: Hash, run: () => runEditorAction('editor.action.quickOutline') },
+    { id: 'zen', title: 'View: Toggle Zen Mode', detail: 'Hide everything but the editor (Ctrl+K Z, Esc to leave)', icon: PanelBottom, run: actions.toggleZenMode },
+    { id: 'fullscreen', title: 'View: Toggle Full Screen', detail: 'F11', icon: PanelBottom, run: actions.toggleFullScreen },
+    { id: 'activity-bar', title: 'View: Toggle Activity Bar Visibility', detail: '', icon: PanelBottom, run: () => actions.setEditorSettings({ showActivityBar: !state.editorSettings.showActivityBar }) },
+    { id: 'status-bar', title: 'View: Toggle Status Bar Visibility', detail: '', icon: PanelBottom, run: () => actions.setEditorSettings({ showStatusBar: !state.editorSettings.showStatusBar }) },
+    { id: 'keybindings', title: 'Preferences: Open Keyboard Shortcuts', detail: 'Ctrl+K Ctrl+S', icon: Settings, run: () => actions.openSettings('keybindings') },
+    { id: 'theme', title: 'Preferences: Color Theme', detail: 'Ctrl+K Ctrl+T', icon: Palette, run: () => pickColorTheme(state, actions) },
+    { id: 'clean', title: 'ESP Studio: Clean Build Outputs', detail: 'Remove the last build artifact and logs', icon: Trash2, run: actions.cleanBuild },
     { id: 'save', title: 'File: Save', detail: 'Save the active file (Ctrl+S)', icon: Save, run: () => actions.saveFile() },
     { id: 'save-all', title: 'File: Save All', detail: 'Save every modified file (Ctrl+Shift+S)', icon: Save, run: actions.saveAllFiles },
     { id: 'close-editor', title: 'View: Close Editor', detail: 'Close the active tab (Ctrl+W)', icon: X, run: () => actions.closeTab(state.activeFilePath) },
@@ -92,7 +112,7 @@ export const CommandPalette: React.FC = () => {
     { id: 'find-in-files', title: 'Search: Find in Files', detail: 'Search across the workspace (Ctrl+Shift+F)', icon: Search, run: () => actions.setSidebarView('search') },
     { id: 'word-wrap', title: 'View: Toggle Word Wrap', detail: `Currently ${state.editorSettings.wordWrap ? 'on' : 'off'}`, icon: Code, run: () => actions.setEditorSettings({ wordWrap: !state.editorSettings.wordWrap }) },
     { id: 'minimap', title: 'View: Toggle Minimap', detail: `Currently ${state.editorSettings.minimap ? 'shown' : 'hidden'}`, icon: Code, run: () => actions.setEditorSettings({ minimap: !state.editorSettings.minimap }) },
-    { id: 'settings', title: 'Preferences: Open Settings', detail: 'Editor, toolchain and theme settings (Ctrl+,)', icon: Settings, run: () => actions.setActiveNavTab('settings') },
+    { id: 'settings', title: 'Preferences: Open Settings', detail: 'Editor, toolchain and theme settings (Ctrl+,)', icon: Settings, run: () => actions.openSettings() },
     { id: 'ai', title: 'View: Toggle AI Copilot Panel', detail: 'Show or hide the assistant (Ctrl+Shift+A)', icon: Bot, run: actions.toggleAiPanel },
     {
       id: 'build',
@@ -175,19 +195,23 @@ export const CommandPalette: React.FC = () => {
         }
       },
     },
-    ...Object.entries(THEME_PALETTES).map(([id, p]) => ({
-      id: `theme-${id}`,
-      title: `Preferences: Color Theme: ${p.name}`,
-      detail: id === state.theme ? 'Current theme' : 'Switch color theme',
-      icon: Palette,
-      run: () => actions.setTheme(id as ThemeName),
-    })),
   ];
 
   let items: PaletteItem[];
   let emptyText = 'No matching results.';
+  const quickPick = state.quickPick;
 
-  if (search.startsWith('>')) {
+  if (quickPick) {
+    // A picker (language mode, theme, ...) replaces the normal modes; current choice first
+    const sorted = [...quickPick.items].sort((a, b) => Number(!!b.current) - Number(!!a.current));
+    items = rank(sorted, search.trim(), (i) => `${i.label} ${i.detail ?? ''}`).map((i) => ({
+      id: i.id,
+      title: i.label,
+      detail: i.detail ?? '',
+      checked: i.current,
+      run: () => quickPick.onPick(i.id),
+    }));
+  } else if (search.startsWith('>')) {
     items = rank(commands, search.slice(1).trim(), (c) => `${c.title} ${c.detail}`);
     emptyText = 'No matching commands.';
   } else if (search.startsWith(':')) {
@@ -259,7 +283,7 @@ export const CommandPalette: React.FC = () => {
               setSelectedIndex(0);
             }}
             onKeyDown={handleInputKeyDown}
-            placeholder="Search files by name (type > for commands, : for line)"
+            placeholder={quickPick?.placeholder ?? 'Search files by name (type > for commands, : for line)'}
             className="w-full bg-[#0d1117] border border-[#30363d] focus:border-[#58a6ff] rounded px-2 py-1 text-white text-xs outline-none font-mono placeholder-[#8b949e]"
           />
         </div>
@@ -283,6 +307,8 @@ export const CommandPalette: React.FC = () => {
                 >
                   {item.fileName ? (
                     <FileIcon filename={item.fileName} className="w-4 h-4 flex-shrink-0" />
+                  ) : quickPick ? (
+                    <span className="w-4 flex-shrink-0">{item.checked && <Check className="w-4 h-4 text-[#58a6ff]" />}</span>
                   ) : (
                     Icon && <Icon className="w-4 h-4 text-[#58a6ff] flex-shrink-0" />
                   )}

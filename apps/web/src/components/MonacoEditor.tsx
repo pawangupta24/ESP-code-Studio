@@ -2,6 +2,9 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useWorkspaceStore } from '../stores/useWorkspaceStore';
 import { THEME_PALETTES } from '../themeTokens';
 import { setPrimaryEditor, setFocusedEditor, releaseEditor } from '../editorBridge';
+import { detectLanguage } from '../languages';
+import { toMonacoOptions } from '../settingsSchema';
+import { syncExtensionContributions } from '../extensionHost';
 
 declare global {
   interface Window {
@@ -19,48 +22,18 @@ interface MonacoEditorProps {
 
 const MONACO_BASE = 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs';
 
-// Map file extensions to Monaco language IDs
-const getLanguageId = (path: string): string => {
-  const ext = '.' + (path.split('.').pop() || '').toLowerCase();
-  const map: Record<string, string> = {
-    '.cpp': 'cpp',
-    '.c': 'c',
-    '.hpp': 'cpp',
-    '.h': 'c',
-    '.ino': 'cpp',
-    '.py': 'python',
-    '.rs': 'rust',
-    '.js': 'javascript',
-    '.mjs': 'javascript',
-    '.ts': 'typescript',
-    '.tsx': 'typescript',
-    '.json': 'json',
-    '.ini': 'ini',
-    '.cfg': 'ini',
-    '.md': 'markdown',
-    '.html': 'html',
-    '.htm': 'html',
-    '.css': 'css',
-    '.sh': 'shell',
-    '.bash': 'shell',
-    '.ps1': 'powershell',
-    '.yaml': 'yaml',
-    '.yml': 'yaml',
-    '.xml': 'xml',
-    '.cmake': 'cmake',
-  };
-  if (path.toLowerCase().endsWith('cmakelists.txt')) return 'cmake';
-  if (path.toLowerCase().includes('dockerfile')) return 'dockerfile';
-  return map[ext] || 'plaintext';
-};
-
 // One Monaco model per file, shared by every editor pane. This is what gives each
 // file its own undo history and keeps split panes of the same file in sync.
 // ponytail: models of deleted/renamed files are never disposed; dispose in
 // deleteFile/renameFile if projects grow to thousands of files.
-const getModel = (monaco: any, path: string, content: string) => {
+const getModel = (monaco: any, path: string, content: string, language: string, settings: any) => {
   const uri = monaco.Uri.file('/' + path);
-  return monaco.editor.getModel(uri) || monaco.editor.createModel(content, getLanguageId(path), uri);
+  const existing = monaco.editor.getModel(uri);
+  if (existing) return existing;
+  const model = monaco.editor.createModel(content, language, uri);
+  if (settings.detectIndentation) model.detectIndentation(settings.insertSpaces, settings.tabSize);
+  else model.updateOptions({ tabSize: settings.tabSize, insertSpaces: settings.insertSpaces });
+  return model;
 };
 
 // Scroll/cursor position per file, restored when switching back to a tab.
@@ -77,6 +50,7 @@ export const MonacoEditor: React.FC<MonacoEditorProps> = ({ filePath, content, o
   const [isMonacoReady, setIsMonacoReady] = useState(!!window.monaco);
   const palette = THEME_PALETTES[state.theme] || THEME_PALETTES['github-dark'];
   const settings = state.editorSettings;
+  const language = detectLanguage(filePath, state.languageOverrides[filePath]);
 
   // Load Monaco via AMD loader
   useEffect(() => {
@@ -121,6 +95,18 @@ export const MonacoEditor: React.FC<MonacoEditorProps> = ({ filePath, content, o
     });
     editor.onDidFocusEditorText(() => setFocusedEditor(editor));
 
+    // Our Ctrl+K chords must go through Monaco's own keybinding service while the editor has
+    // focus; otherwise Monaco keeps waiting for a chord key and swallows the next keystroke.
+    const { KeyMod, KeyCode } = window.monaco;
+    const chord = (second: number, command: string) =>
+      editor.addCommand(KeyMod.chord(KeyMod.CtrlCmd | KeyCode.KeyK, second), () =>
+        window.dispatchEvent(new CustomEvent('esp-studio:command', { detail: command }))
+      );
+    chord(KeyCode.KeyM, 'languageMode');
+    chord(KeyCode.KeyZ, 'zenMode');
+    chord(KeyMod.CtrlCmd | KeyCode.KeyT, 'colorTheme');
+    chord(KeyMod.CtrlCmd | KeyCode.KeyS, 'keybindings');
+
     return () => {
       viewStates.set(pathRef.current, editor.saveViewState());
       releaseEditor(editor);
@@ -133,7 +119,8 @@ export const MonacoEditor: React.FC<MonacoEditorProps> = ({ filePath, content, o
   useEffect(() => {
     const editor = editorRef.current;
     if (!editor || !window.monaco) return;
-    const model = getModel(window.monaco, filePath, content);
+    const model = getModel(window.monaco, filePath, content, language, settings);
+    if (model.getLanguageId() !== language) window.monaco.editor.setModelLanguage(model, language);
 
     if (editor.getModel() !== model) {
       if (editor.getModel()) viewStates.set(pathRef.current, editor.saveViewState());
@@ -149,7 +136,20 @@ export const MonacoEditor: React.FC<MonacoEditorProps> = ({ filePath, content, o
       syncingRef.current = false;
     }
     if (isPrimary) setPrimaryEditor(editor, filePath);
-  }, [isMonacoReady, filePath, content, isPrimary]);
+  }, [isMonacoReady, filePath, content, isPrimary, language]);
+
+  // Snippets contributed by enabled extensions
+  useEffect(() => {
+    if (isMonacoReady) syncExtensionContributions(state.extensions);
+  }, [isMonacoReady, state.extensions]);
+
+  // Indentation settings apply to every open file unless auto-detected per file
+  useEffect(() => {
+    if (!isMonacoReady || settings.detectIndentation) return;
+    window.monaco.editor.getModels().forEach((m: any) =>
+      m.updateOptions({ tabSize: settings.tabSize, insertSpaces: settings.insertSpaces })
+    );
+  }, [isMonacoReady, settings.tabSize, settings.insertSpaces, settings.detectIndentation]);
 
   // Theme + editor options
   useEffect(() => {
@@ -183,20 +183,7 @@ export const MonacoEditor: React.FC<MonacoEditorProps> = ({ filePath, content, o
     });
     monaco.editor.setTheme('esp-studio-theme');
 
-    editor.updateOptions({
-      fontSize: Math.max(10, Math.min(26, Math.round((settings.fontSize * state.zoomLevel) / 100))),
-      fontFamily: settings.fontFamily,
-      tabSize: settings.tabSize,
-      wordWrap: settings.wordWrap ? 'on' : 'off',
-      minimap: { enabled: settings.minimap },
-      lineNumbers: settings.lineNumbers ? 'on' : 'off',
-      bracketPairColorization: { enabled: settings.bracketPairColorization },
-      cursorBlinking: settings.cursorBlinking || 'smooth',
-      cursorStyle: settings.cursorStyle || 'line',
-      renderWhitespace: settings.renderWhitespace || 'selection',
-      autoClosingBrackets: settings.autoClosingBrackets ? 'always' : 'never',
-      autoClosingQuotes: settings.autoClosingQuotes ? 'always' : 'never',
-    });
+    editor.updateOptions(toMonacoOptions(settings, state.zoomLevel));
   }, [isMonacoReady, state.theme, state.zoomLevel, settings]);
 
   // Compiler markers / diagnostics (red/yellow squiggly lines)

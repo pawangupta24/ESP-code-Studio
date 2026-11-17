@@ -19,7 +19,7 @@ import {
 export const ExtensionsMarketplace: React.FC = () => {
   const [state, actions] = useWorkspaceStore();
   const [categoryFilter, setCategoryFilter] = useState<
-    'All' | 'Installed' | 'Language' | 'Formatter' | 'Embedded Runtime' | 'Debugging'
+    'All' | 'Installed' | 'Language' | 'Snippets' | 'Theme' | 'Formatter' | 'Embedded Runtime' | 'Debugging'
   >('All');
   const [mobileDetailView, setMobileDetailView] = useState(false);
   const palette = THEME_PALETTES[state.theme] || THEME_PALETTES['github-dark'];
@@ -30,6 +30,7 @@ export const ExtensionsMarketplace: React.FC = () => {
       ext.displayName.toLowerCase().includes(query) ||
       ext.description.toLowerCase().includes(query) ||
       ext.publisher.toLowerCase().includes(query) ||
+      ext.category.toLowerCase().includes(query) ||
       ext.fileExtensions.some((fe) => fe.toLowerCase().includes(query));
 
     if (!matchesSearch) return false;
@@ -91,7 +92,7 @@ export const ExtensionsMarketplace: React.FC = () => {
         </div>
 
         {/* Search Bar & Category Filter Pills */}
-        <div className="flex flex-col md:flex-row gap-2 items-stretch md:items-center justify-between">
+        <div className="flex flex-col gap-2 items-stretch">
           {/* Search Input */}
           <div
             style={{ backgroundColor: palette.bgMain, borderColor: palette.border }}
@@ -117,8 +118,8 @@ export const ExtensionsMarketplace: React.FC = () => {
           </div>
 
           {/* Filter Pills */}
-          <div className="flex items-center space-x-1.5 overflow-x-auto pb-1 md:pb-0">
-            {(['All', 'Installed', 'Language', 'Formatter', 'Embedded Runtime', 'Debugging'] as const).map(
+          <div className="flex items-center space-x-1.5 overflow-x-auto pb-1">
+            {(['All', 'Installed', 'Language', 'Snippets', 'Theme', 'Formatter', 'Embedded Runtime', 'Debugging'] as const).map(
               (cat) => (
                 <button
                   key={cat}
@@ -206,7 +207,7 @@ export const ExtensionsMarketplace: React.FC = () => {
                     >
                       {!ext.installed ? (
                         <button
-                          onClick={() => actions.installExtension(ext.id, true)}
+                          onClick={() => actions.installExtension(ext.id)}
                           className="flex items-center space-x-1 px-2.5 sm:px-3 py-1 rounded-lg bg-[#1f6feb] hover:bg-[#388bfd] text-white text-[11px] font-semibold transition-colors shadow-sm"
                         >
                           <Download className="w-3 h-3" />
@@ -322,7 +323,7 @@ export const ExtensionsMarketplace: React.FC = () => {
             <div className="flex items-center space-x-2">
               {!selectedExt.installed ? (
                 <button
-                  onClick={() => actions.installExtension(selectedExt.id, true)}
+                  onClick={() => actions.installExtension(selectedExt.id)}
                   className="flex-1 flex items-center justify-center space-x-1.5 py-2 rounded-lg bg-[#1f6feb] hover:bg-[#388bfd] text-white font-semibold text-xs transition-colors shadow-sm"
                 >
                   <Download className="w-3.5 h-3.5" />
@@ -358,6 +359,34 @@ export const ExtensionsMarketplace: React.FC = () => {
                 {selectedExt.description}
               </p>
             </div>
+
+            {/* What installing actually adds */}
+            {selectedExt.contributes && (
+              <div className="space-y-1.5">
+                <h3 className="text-[11px] font-bold text-white uppercase tracking-wider">Contributions</h3>
+                {selectedExt.contributes.snippets?.map((g) => (
+                  <div key={g.language} className="text-[11px] text-[#c9d1d9]">
+                    <span className="text-[#58a6ff]">{g.language}</span> snippets:{' '}
+                    <span className="text-[#8b949e]">{g.items.map((i) => i.prefix).join(', ')}</span>
+                  </div>
+                ))}
+                {selectedExt.contributes.themes?.map((t) => (
+                  <div key={t} className="flex items-center justify-between text-[11px] text-[#c9d1d9]">
+                    <span>Color theme: {THEME_PALETTES[t]?.name ?? t}</span>
+                    {selectedExt.installed && selectedExt.enabled && (
+                      <button onClick={() => actions.setTheme(t)} className="px-2 py-0.5 rounded bg-[#1f6feb] text-white text-[10px]">
+                        {state.theme === t ? 'Active' : 'Set Color Theme'}
+                      </button>
+                    )}
+                  </div>
+                ))}
+                {selectedExt.contributes.snippets && (
+                  <p className="text-[10px] text-[#8b949e]">
+                    Type a prefix in a matching file and pick it from the suggestions (Ctrl+Space).
+                  </p>
+                )}
+              </div>
+            )}
 
             {/* Key Features */}
             <div className="space-y-2">

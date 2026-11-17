@@ -23,6 +23,7 @@ export const ExtensionsSidebar: React.FC = () => {
       ext.displayName.toLowerCase().includes(query) ||
       ext.description.toLowerCase().includes(query) ||
       ext.publisher.toLowerCase().includes(query) ||
+      ext.category.toLowerCase().includes(query) ||
       ext.fileExtensions.some((fe) => fe.toLowerCase().includes(query));
 
     if (!matchesSearch) return false;
@@ -156,7 +157,7 @@ export const ExtensionsSidebar: React.FC = () => {
                   <div className="flex items-center space-x-1 ml-1 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
                     {!ext.installed ? (
                       <button
-                        onClick={() => actions.installExtension(ext.id, true)}
+                        onClick={() => actions.installExtension(ext.id)}
                         className="px-2 py-0.5 rounded bg-[#1f6feb] hover:bg-[#388bfd] text-white text-[10px] font-semibold flex items-center space-x-1 transition-colors shadow-sm"
                         title="Install Extension"
                       >

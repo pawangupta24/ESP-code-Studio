@@ -62,14 +62,15 @@ export const Header: React.FC = () => {
           </div>
 
           {/* VS Code Classic Menus: File Edit Selection View Go Run Terminal Help */}
-          <div className="overflow-x-auto scrollbar-none flex-shrink min-w-0">
+          {/* No overflow clipping here: it would cut off the dropdown menus */}
+          <div className="flex-shrink min-w-0">
             <TopMenuBar />
           </div>
         </div>
 
         {/* Center: Quick Command / File Bar (VS Code Center Search) */}
         <div
-          onClick={() => actions.setCommandPaletteOpen(true)}
+          onClick={() => actions.setCommandPaletteOpen(true, '')}
           className="hidden md:flex items-center space-x-2 px-3 py-0.5 rounded bg-[#0d1117] border border-[#30363d] hover:border-[#58a6ff] cursor-pointer text-[#8b949e] text-[11px] max-w-sm truncate transition-colors shadow-sm"
           title={`Quick Search & Command Palette (${getModifierKey()}+P)`}
         >
@@ -159,7 +160,7 @@ export const Header: React.FC = () => {
                   className="w-full flex items-center space-x-2 px-2.5 py-1.5 rounded hover:bg-[#21262d] text-[#c9d1d9] text-left"
                 >
                   <Command className="w-3.5 h-3.5" />
-                  <span>Command Palette ({getModifierKey()}+K)</span>
+                  <span>Command Palette ({getModifierKey()}+Shift+P)</span>
                 </button>
 
                 <button
@@ -192,6 +193,7 @@ export const Header: React.FC = () => {
       {/* =========================================================================
           ROW 2: Embedded Hardware & Compilation Action Bar
          ========================================================================= */}
+      {state.editorSettings.showToolbar && !state.zenMode && (
       <div className="h-9 px-2 sm:px-3 flex items-center justify-between text-[11px] overflow-x-auto scrollbar-none">
         {/* Left: Board Target, Framework & Engine Toggle */}
         <div className="flex items-center space-x-2 min-w-0 flex-shrink-0">
@@ -355,13 +357,14 @@ export const Header: React.FC = () => {
           <button
             onClick={() => actions.setCommandPaletteOpen(true)}
             className="hidden lg:flex items-center space-x-1 px-1.5 py-0.5 rounded bg-[#0d1117] hover:bg-[#21262d] text-[#8b949e] hover:text-white border border-[#30363d] text-[10px]"
-            title={`Command Palette (${getModifierKey()}+K)`}
+            title={`Command Palette (${getModifierKey()}+Shift+P)`}
           >
             <Command className="w-2.5 h-2.5 text-[#58a6ff]" />
-            <span>{getModifierKey()}+K</span>
+            <span>{getModifierKey()}+Shift+P</span>
           </button>
         </div>
       </div>
+      )}
     </header>
   );
 };

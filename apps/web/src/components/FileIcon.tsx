@@ -15,6 +15,28 @@ import {
   Code2,
 } from 'lucide-react';
 
+const BADGES: Record<string, [string, string]> = {
+  '.go': ['GO', '#00add8'],
+  '.java': ['JV', '#e76f00'],
+  '.cs': ['C#', '#9b4f96'],
+  '.rb': ['RB', '#cc342d'],
+  '.php': ['PHP', '#8892bf'],
+  '.lua': ['LUA', '#000080'],
+  '.kt': ['KT', '#a97bff'],
+  '.kts': ['KT', '#a97bff'],
+  '.dart': ['DT', '#0175c2'],
+  '.swift': ['SW', '#f05138'],
+  '.sql': ['SQL', '#e38c00'],
+  '.r': ['R', '#276dc3'],
+  '.scala': ['SC', '#dc322f'],
+  '.pl': ['PL', '#39457e'],
+  '.bat': ['BAT', '#c1f12e'],
+  '.jsx': ['JSX', '#61dafb'],
+  '.vue': ['VUE', '#41b883'],
+  '.graphql': ['GQL', '#e10098'],
+  '.sol': ['SOL', '#aaaaaa'],
+};
+
 interface FileIconProps {
   filename: string;
   isFolder?: boolean;
@@ -126,6 +148,16 @@ export const FileIcon: React.FC<FileIconProps> = ({
   }
   if (lower.endsWith('.txt')) {
     return <FileText className={`${className} text-[#8b949e]`} />;
+  }
+
+  // Short text badges for other common languages
+  const badge = BADGES[lower.slice(lower.lastIndexOf('.'))];
+  if (badge) {
+    return (
+      <span className={`${className} flex items-center justify-center font-bold text-[8px] leading-none`} style={{ color: badge[1] }}>
+        {badge[0]}
+      </span>
+    );
   }
 
   return <FileCheck className={`${className} text-[#8b949e]`} />;

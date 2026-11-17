@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useWorkspaceStore } from '../stores/useWorkspaceStore';
 import { FileIcon } from './FileIcon';
+import { detectLanguage, NEW_FILE_TEMPLATES } from '../languages';
 import {
   ChevronRight,
   ChevronDown,
@@ -60,7 +61,9 @@ export const ExplorerSidebar: React.FC = () => {
 
   const handleDeleteFolder = (folder: string) => {
     const files = filesUnder(folder);
-    if (confirm(`Delete folder "${folder}" and its ${files.length} file(s)?`)) files.forEach(actions.deleteFile);
+    if (!state.editorSettings.confirmDelete || confirm(`Delete folder "${folder}" and its ${files.length} file(s)?`)) {
+      files.forEach(actions.deleteFile);
+    }
   };
 
   // Build nested tree structure
@@ -113,13 +116,10 @@ export const ExplorerSidebar: React.FC = () => {
   };
 
   const handleCreateFile = () => {
-    const name = prompt('New File Name (e.g. src/telemetry.cpp or main.py):');
+    const name = prompt('New file name (e.g. src/telemetry.cpp, app.py, main.go):')?.trim();
     if (!name) return;
-    let initial = '// ESP Studio File\n';
-    if (name.endsWith('.cpp')) initial = '#include <Arduino.h>\n\n';
-    else if (name.endsWith('.py')) initial = '# MicroPython\nimport machine\n\n';
-    else if (name.endsWith('.rs')) initial = '//! Rust no_std\n#![no_std]\n\n';
-    actions.createFile(name, initial);
+    // Start from the language's template (empty for languages without one)
+    actions.createFile(name, NEW_FILE_TEMPLATES[detectLanguage(name)] ?? '');
   };
 
   const handleCreateFolder = () => {
@@ -147,7 +147,7 @@ export const ExplorerSidebar: React.FC = () => {
             else actions.setActiveFilePath(node.path);
           }}
           onContextMenu={(e) => handleContextMenu(e, node.path, isFolder)}
-          style={{ paddingLeft: `${level * 14 + 10}px` }}
+          style={{ paddingLeft: `${level * state.editorSettings.treeIndent + 10}px` }}
           className={`flex items-center justify-between py-1 pr-2 cursor-pointer transition-colors group ${
             isActive
               ? 'bg-[#21262d] text-[#58a6ff] font-medium border-l-2 border-[#58a6ff]'
@@ -322,7 +322,7 @@ export const ExplorerSidebar: React.FC = () => {
           <button
             onClick={() => {
               if (contextMenu.isFolder) handleDeleteFolder(contextMenu.path);
-              else if (confirm(`Delete file "${contextMenu.path}"?`)) actions.deleteFile(contextMenu.path);
+              else if (!state.editorSettings.confirmDelete || confirm(`Delete file "${contextMenu.path}"?`)) actions.deleteFile(contextMenu.path);
             }}
             className="w-full text-left px-3 py-1 hover:bg-rose-950 text-rose-400 flex items-center space-x-1.5"
           >

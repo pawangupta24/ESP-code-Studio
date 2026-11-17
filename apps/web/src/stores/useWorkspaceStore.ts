@@ -6,6 +6,26 @@ import { MockSerialProvider } from '@esp-studio/serial-core';
 import { SimulatedFlashProvider, FlashProgress } from '@esp-studio/flash-core';
 import { SyncEngine } from '@esp-studio/sync-core';
 import { downloadProjectAsZip } from '../utils/zipExport';
+import { EditorCustomization, DEFAULT_EDITOR_SETTINGS, normalizeSettings } from '../settingsSchema';
+import { ExtensionItem, createExtensions, availableThemes } from '../extensionsCatalog';
+import { formatDocumentIn } from '../editorBridge';
+import { defaultExtension, NEW_FILE_TEMPLATES } from '../languages';
+
+export type { EditorCustomization, ExtensionItem };
+export { DEFAULT_EDITOR_SETTINGS };
+
+/** A VS Code-style quick pick shown in the command palette (language mode, theme, ...). */
+export interface QuickPickItem {
+  id: string;
+  label: string;
+  detail?: string;
+  current?: boolean;
+}
+export interface QuickPick {
+  placeholder: string;
+  items: QuickPickItem[];
+  onPick: (id: string) => void;
+}
 
 export type NavTab = 
   | 'explorer' 
@@ -24,7 +44,8 @@ export type NavTab =
 
 export type BuildEngineMode = 'cloud' | 'local';
 
-export type ThemeName = 'github-dark' | 'vscode-dark' | 'dracula' | 'monokai' | 'cyberpunk' | 'nord' | 'one-dark-pro';
+// Built-in ids plus whatever theme extensions contribute (see extensionsCatalog.ts)
+export type ThemeName = string;
 
 export type AiModelId = 'gemini-1.5-pro' | 'gemini-1.5-flash' | 'claude-3.5-sonnet' | 'gpt-4o' | 'deepseek-coder';
 
@@ -42,48 +63,6 @@ export interface CodeDiagnostic {
   message: string;
   severity: 'error' | 'warning';
 }
-
-export interface EditorCustomization {
-  fontSize: number;
-  fontFamily: string;
-  tabSize: number;
-  wordWrap: boolean;
-  minimap: boolean;
-  formatOnSave: boolean;
-  lineNumbers?: boolean;
-  bracketPairColorization?: boolean;
-  cursorBlinking?: 'blink' | 'smooth' | 'phase' | 'solid';
-  cursorStyle?: 'line' | 'block' | 'underline';
-  renderWhitespace?: 'none' | 'boundary' | 'selection' | 'all';
-  autoClosingBrackets?: boolean;
-  autoClosingQuotes?: boolean;
-  flashSpeed?: '40m' | '80m' | '120m';
-  flashMode?: 'dio' | 'qio' | 'dout';
-  defaultBaudRate?: number;
-  autoScrollSerial?: boolean;
-  showSerialTimestamps?: boolean;
-}
-
-export const DEFAULT_EDITOR_SETTINGS: EditorCustomization = {
-  fontSize: 13,
-  fontFamily: "'JetBrains Mono', Consolas, monospace",
-  tabSize: 2,
-  wordWrap: false,
-  minimap: true,
-  formatOnSave: true,
-  lineNumbers: true,
-  bracketPairColorization: true,
-  cursorBlinking: 'smooth',
-  cursorStyle: 'line',
-  renderWhitespace: 'selection',
-  autoClosingBrackets: true,
-  autoClosingQuotes: true,
-  flashSpeed: '80m',
-  flashMode: 'qio',
-  defaultBaudRate: 115200,
-  autoScrollSerial: true,
-  showSerialTimestamps: true,
-};
 
 export interface UserAccount {
   id: string;
@@ -121,27 +100,6 @@ export interface LibraryItem {
   description: string;
   installed: boolean;
   category: 'Sensors' | 'Display' | 'Communication' | 'Data Processing';
-}
-
-export interface ExtensionItem {
-  id: string;
-  name: string;
-  displayName: string;
-  publisher: string;
-  version: string;
-  description: string;
-  icon: string;
-  downloads: string;
-  rating: number;
-  category: 'Language' | 'Formatter' | 'Embedded Runtime' | 'Debugging';
-  fileExtensions: string[];
-  installed: boolean;
-  enabled: boolean;
-  features: string[];
-  sampleTemplate?: {
-    filename: string;
-    content: string;
-  };
 }
 
 export interface WorkspaceState {
@@ -211,6 +169,11 @@ export interface WorkspaceState {
   paletteQuery: string; // initial text: '>' = commands, '' = files, ':' = go to line
   sidebarView: string; // 'explorer' | 'search' | 'git' | 'debug' | 'extensions' | 'esp32' | '' (hidden)
   dirtyFiles: string[]; // edited since last Save (content itself is auto-persisted)
+  languageOverrides: Record<string, string>; // per-file language picked via "Change Language Mode"
+  zenMode: boolean;
+  isFullScreen: boolean;
+  quickPick: QuickPick | null;
+  settingsSection: string; // which Settings category to show when opened
   bottomPanelTab: 'serial' | 'plotter' | 'terminal' | 'build' | 'problems' | 'closed';
   searchQuery: string;
   zoomLevel: number;
@@ -250,17 +213,25 @@ function pickUiState(s: WorkspaceState) {
     openTabs: s.openTabs,
     activeFilePath: s.activeFilePath,
     sidebarView: s.sidebarView,
+    languageOverrides: s.languageOverrides,
+    extensions: Object.fromEntries(s.extensions.map((e) => [e.id, { installed: e.installed, enabled: e.enabled }])),
   };
 }
 
-function loadUiState(project: Project): Partial<ReturnType<typeof pickUiState>> {
+function loadUiState(project: Project): Partial<WorkspaceState> {
   try {
     const ui = JSON.parse(window.localStorage.getItem(UI_STORAGE_KEY) || '{}');
     if (!ui || typeof ui !== 'object') return {};
-    const out: Partial<ReturnType<typeof pickUiState>> = {};
-    if (typeof ui.theme === 'string') out.theme = ui.theme;
+    const out: Partial<WorkspaceState> = {};
+    out.extensions = createExtensions(ui.extensions && typeof ui.extensions === 'object' ? ui.extensions : undefined);
+    if (typeof ui.theme === 'string' && availableThemes(out.extensions).includes(ui.theme)) out.theme = ui.theme;
     if (ui.editorSettings && typeof ui.editorSettings === 'object') {
-      out.editorSettings = { ...DEFAULT_EDITOR_SETTINGS, ...ui.editorSettings };
+      out.editorSettings = normalizeSettings(ui.editorSettings);
+    }
+    if (ui.languageOverrides && typeof ui.languageOverrides === 'object') {
+      out.languageOverrides = Object.fromEntries(
+        Object.entries(ui.languageOverrides).filter(([p, l]) => typeof l === 'string' && project.files[p])
+      ) as Record<string, string>;
     }
     if (typeof ui.zoomLevel === 'number') out.zoomLevel = Math.max(70, Math.min(160, ui.zoomLevel));
     if (typeof ui.sidebarView === 'string') out.sidebarView = ui.sidebarView;
@@ -375,152 +346,7 @@ let globalState: WorkspaceState = {
     },
   ],
   
-  extensions: [
-    {
-      id: 'cpp-esp32',
-      name: 'cpp-esp32',
-      displayName: 'C/C++ & ESP-IDF IntelliSense Pro',
-      publisher: 'Espressif Systems',
-      version: 'v1.4.2',
-      description: 'Rich C/C++ language support, Xtensa-LX7 toolchain headers, and FreeRTOS task completion.',
-      icon: '⚡',
-      downloads: '380k',
-      rating: 4.9,
-      category: 'Language',
-      fileExtensions: ['.cpp', '.c', '.hpp', '.h'],
-      installed: true,
-      enabled: true,
-      features: ['C/C++ Syntax Highlighting', 'FreeRTOS Task Macros', 'ESP32-S3 Hardware Registers', 'Clang Diagnostic Engine'],
-    },
-    {
-      id: 'micropython-esp32',
-      name: 'micropython-esp32',
-      displayName: 'MicroPython & CircuitPython for ESP32',
-      publisher: 'MicroPython Org',
-      version: 'v1.22.0',
-      description: 'Python language support for ESP32-S3 microcontrollers with live REPL injection and machine/neopixel libraries.',
-      icon: '🐍',
-      downloads: '194k',
-      rating: 4.8,
-      category: 'Language',
-      fileExtensions: ['.py'],
-      installed: false,
-      enabled: false,
-      features: ['Python 3 Syntax & Indentation', 'ESP32 machine.Pin & ADC Autocomplete', 'Live REPL Execution', 'MicroPython Firmware Bundler'],
-      sampleTemplate: {
-        filename: 'main.py',
-        content: `# MicroPython on ESP32-S3\nimport machine\nimport time\nimport neopixel\n\n# Configure WS2812 status LED on GPIO 48\nnp = neopixel.NeoPixel(machine.Pin(48), 1)\n\nprint("ESP32-S3 MicroPython Running!")\n\nwhile True:\n    np[0] = (0, 64, 128) # Cyan pulse\n    np.write()\n    time.sleep(0.5)\n    np[0] = (0, 0, 0)\n    np.write()\n    time.sleep(0.5)\n`,
-      },
-    },
-    {
-      id: 'rust-esp32',
-      name: 'rust-esp32',
-      displayName: 'Rust for ESP32 (esp-rs & no_std)',
-      publisher: 'Rust-ESP Community',
-      version: 'v0.18.1',
-      description: 'Rust language support for Xtensa and RISC-V ESP32 targets with esp-hal and esp-idf-svc bindings.',
-      icon: '🦀',
-      downloads: '112k',
-      rating: 4.9,
-      category: 'Language',
-      fileExtensions: ['.rs', '.toml'],
-      installed: false,
-      enabled: false,
-      features: ['Rust Syntax Highlighting', 'no_std Embedded HAL Support', 'Cargo.toml Dependency Resolution', 'Xtensa LLVM Target Linters'],
-      sampleTemplate: {
-        filename: 'src/main.rs',
-        content: `//! Rust no_std firmware for ESP32-S3\n#![no_std]\n#![no_main]\n\nuse esp_backtrace as _;\nuse esp_hal::{\n    clock::ClockControl,\n    peripherals::Peripherals,\n    prelude::*,\n    delay::Delay,\n};\n\n#[entry]\nfn main() -> ! {\n    let peripherals = Peripherals::take();\n    let system = peripherals.SYSTEM.split();\n    let clocks = ClockControl::boot_defaults(system.clock_control).freeze();\n    let delay = Delay::new(&clocks);\n\n    loop {\n        delay.delay_ms(1000u32);\n    }\n}\n`,
-      },
-    },
-    {
-      id: 'quickjs-esp32',
-      name: 'quickjs-esp32',
-      displayName: 'QuickJS & Moddable Embedded JavaScript',
-      publisher: 'Moddable Open Source',
-      version: 'v2.1.0',
-      description: 'Write modern ECMAScript/JavaScript directly for ESP32-S3 with XS runtime and GPIO bindings.',
-      icon: '🟨',
-      downloads: '64k',
-      rating: 4.7,
-      category: 'Embedded Runtime',
-      fileExtensions: ['.js', '.mjs'],
-      installed: false,
-      enabled: false,
-      features: ['ES2020 JavaScript Syntax', 'Digital & PWM Pin Objects', 'Asynchronous Timers', 'Embedded JSON Web APIs'],
-      sampleTemplate: {
-        filename: 'main.js',
-        content: `// QuickJS Embedded Runtime for ESP32-S3\nimport Digital from "embedded:io/digital";\n\nconst statusLed = new Digital({\n  pin: 48,\n  mode: Digital.Output\n});\n\nconsole.log("QuickJS Embedded Initialized on ESP32-S3");\n\nlet state = 0;\nsetInterval(() => {\n  state = state === 0 ? 1 : 0;\n  statusLed.write(state);\n  console.log(\`[QuickJS] LED state: \${state}\`);\n}, 1000);\n`,
-      },
-    },
-    {
-      id: 'pio-ini-support',
-      name: 'pio-ini-support',
-      displayName: 'PlatformIO & INI Configuration Pack',
-      publisher: 'PlatformIO',
-      version: 'v3.0.1',
-      description: 'Language grammar and property validation for platformio.ini and embedded configuration files.',
-      icon: '⚙️',
-      downloads: '520k',
-      rating: 4.9,
-      category: 'Formatter',
-      fileExtensions: ['.ini', '.cfg'],
-      installed: true,
-      enabled: true,
-      features: ['INI Section Syntax Highlighting', 'Board Build Flag Validation', 'Partition Table Offset Validator'],
-    },
-    {
-      id: 'json-schema',
-      name: 'json-schema',
-      displayName: 'JSON & Partition Table Schema Formatter',
-      publisher: 'ESP Studio Core',
-      version: 'v1.2.0',
-      description: 'JSON schema validation for ESP32 partition tables, flash manifests, and build configuration.',
-      icon: '📋',
-      downloads: '290k',
-      rating: 4.8,
-      category: 'Formatter',
-      fileExtensions: ['.json'],
-      installed: true,
-      enabled: true,
-      features: ['JSON Syntax & Formatting', 'ESP32 Partition Scheme Validation', 'Flash Manifest Verification'],
-    },
-    {
-      id: 'markdown-docs',
-      name: 'markdown-docs',
-      displayName: 'Markdown Live Documentation & Notes',
-      publisher: 'Docs Team',
-      version: 'v2.0.4',
-      description: 'Edit firmware release notes, circuit wiring diagrams, and project documentation in rich Markdown.',
-      icon: '📝',
-      downloads: '180k',
-      rating: 4.7,
-      category: 'Language',
-      fileExtensions: ['.md'],
-      installed: false,
-      enabled: false,
-      features: ['Markdown Heading & Link Syntax', 'Embedded Code Block Previews', 'Wiring Pinout Table Support'],
-      sampleTemplate: {
-        filename: 'README.md',
-        content: `# ESP32-S3 Firmware Project\n\n## Hardware Pinout\n- **GPIO 48**: WS2812 Status LED\n- **GPIO 8**: I2C SDA\n- **GPIO 9**: I2C SCL\n- **GPIO 1**: Pressure Sensor ADC\n\n## Quick Start\n1. Connect ESP32-S3 via USB-C (COM4)\n2. Click **Build** to compile with PlatformIO\n3. Click **Flash USB** to upload via esptool-js\n`,
-      },
-    },
-    {
-      id: 'xtensa-asm',
-      name: 'xtensa-asm',
-      displayName: 'Xtensa LX7 Assembly & Hardware Disassembly',
-      publisher: 'Espressif Systems',
-      version: 'v1.1.0',
-      description: 'Xtensa dual-core instruction set architecture assembly syntax highlighting, registers, and opcode hints.',
-      icon: '🔬',
-      downloads: '45k',
-      rating: 4.6,
-      category: 'Debugging',
-      fileExtensions: ['.S', '.asm'],
-      installed: false,
-      enabled: false,
-      features: ['Xtensa LX7 Opcode Highlighting', 'Special Register (SAR, EPC) Hints', 'Bootloader Assembly Tracing'],
-    },
-  ],
+  extensions: createExtensions(),
   extensionSearchQuery: '',
   selectedExtensionId: null,
   
@@ -546,6 +372,11 @@ let globalState: WorkspaceState = {
   paletteQuery: '>',
   sidebarView: 'explorer',
   dirtyFiles: [],
+  languageOverrides: {},
+  zenMode: false,
+  isFullScreen: false,
+  quickPick: null,
+  settingsSection: 'commonly-used',
   bottomPanelTab: 'serial',
   searchQuery: '',
   zoomLevel: 100,
@@ -571,6 +402,26 @@ globalState = { ...globalState, ...loadUiState(initialProject) };
 
 const listeners = new Set<(s: WorkspaceState) => void>();
 let lastSavedUi = '';
+
+// Content as of the last Save, per file. A file is dirty when it differs from this, so undoing
+// back to the saved text clears the dot, and Revert File restores it.
+const savedContent = new Map<string, string>(
+  Object.entries(initialProject.files).map(([p, f]) => [p, f.content])
+);
+const autoSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function resetSavedContent(project: Project) {
+  savedContent.clear();
+  Object.entries(project.files).forEach(([p, f]) => savedContent.set(p, f.content));
+}
+
+/** Transforms applied on save, per files.* settings. */
+function applySaveTransforms(content: string, s: EditorCustomization): string {
+  let out = content;
+  if (s.trimTrailingWhitespace) out = out.replace(/[ \t]+$/gm, '');
+  if (s.insertFinalNewline && out.length > 0 && !out.endsWith('\n')) out += '\n';
+  return out;
+}
 
 function saveToLocalStorage(project: Project) {
   if (typeof window !== 'undefined' && window.localStorage) {
@@ -688,6 +539,16 @@ export function useWorkspaceStore(): [WorkspaceState, {
   exportProjectZip: () => void;
   setSplitFilePath: (path: string | null) => void;
   toggleSplitEditor: () => void;
+  revertFile: (path?: string) => void;
+  newUntitledFile: (language?: string) => void;
+  importFiles: (files: Record<string, string>, workspaceName?: string) => void;
+  setLanguageOverride: (path: string, language: string | null) => void;
+  toggleZenMode: () => void;
+  toggleFullScreen: () => void;
+  setFullScreenState: (on: boolean) => void;
+  showQuickPick: (pick: QuickPick | null) => void;
+  openSettings: (section?: string) => void;
+  cleanBuild: () => void;
 }] {
   const [, setTick] = useState(0);
 
@@ -705,6 +566,11 @@ export function useWorkspaceStore(): [WorkspaceState, {
     if (globalState.activeNavTab !== 'explorer') globalState.activeNavTab = 'explorer';
   };
 
+  // Disabling a theme extension while its theme is active falls back to the default theme
+  const dropUnavailableTheme = () => {
+    if (!availableThemes(globalState.extensions).includes(globalState.theme)) globalState.theme = 'github-dark';
+  };
+
   const actions = {
     setActiveFilePath: (path: string) => {
       globalState.activeFilePath = path;
@@ -719,10 +585,20 @@ export function useWorkspaceStore(): [WorkspaceState, {
       if (globalState.project.files[path]) {
         globalState.project.files[path].content = content;
         globalState.project.files[path].lastModified = Date.now();
-        if (!globalState.dirtyFiles.includes(path)) globalState.dirtyFiles = [...globalState.dirtyFiles, path];
+        const isDirty = savedContent.get(path) !== content;
+        const listed = globalState.dirtyFiles.includes(path);
+        if (isDirty && !listed) globalState.dirtyFiles = [...globalState.dirtyFiles, path];
+        if (!isDirty && listed) globalState.dirtyFiles = globalState.dirtyFiles.filter((t) => t !== path);
         globalState.syncStatus = 'PENDING';
+        // Content is always persisted (like VS Code hot exit); "saved" is tracked separately.
         saveToLocalStorage(globalState.project);
         emit();
+
+        const s = globalState.editorSettings;
+        clearTimeout(autoSaveTimers.get(path));
+        if (s.autoSave === 'afterDelay' && isDirty) {
+          autoSaveTimers.set(path, setTimeout(() => actions.saveFile(path), s.autoSaveDelay));
+        }
       }
     },
 
@@ -740,6 +616,7 @@ export function useWorkspaceStore(): [WorkspaceState, {
         content: initialContent,
         lastModified: Date.now(),
       };
+      savedContent.set(normalized, initialContent);
       if (!globalState.openTabs.includes(normalized)) {
         globalState.openTabs = [...globalState.openTabs, normalized];
       }
@@ -773,6 +650,12 @@ export function useWorkspaceStore(): [WorkspaceState, {
         }
         if (globalState.splitFilePath === oldPath) globalState.splitFilePath = newPath;
         globalState.dirtyFiles = globalState.dirtyFiles.map((t) => (t === oldPath ? newPath : t));
+        savedContent.set(newPath, savedContent.get(oldPath) ?? file.content);
+        savedContent.delete(oldPath);
+        if (globalState.languageOverrides[oldPath]) {
+          const { [oldPath]: lang, ...rest } = globalState.languageOverrides;
+          globalState.languageOverrides = { ...rest, [newPath]: lang };
+        }
         globalState.syncStatus = 'PENDING';
         saveToLocalStorage(globalState.project);
         emit();
@@ -785,6 +668,9 @@ export function useWorkspaceStore(): [WorkspaceState, {
     },
 
     closeTab: (path: string) => {
+      // Content is already persisted, so closing keeps the edits; treat them as saved.
+      const f = globalState.project.files[path];
+      if (f) savedContent.set(path, f.content);
       const idx = globalState.openTabs.indexOf(path);
       globalState.openTabs = globalState.openTabs.filter((t) => t !== path);
       if (globalState.activeFilePath === path) {
@@ -821,15 +707,93 @@ export function useWorkspaceStore(): [WorkspaceState, {
       emit();
     },
 
-    saveFile: (path: string = globalState.activeFilePath) => {
+    saveFile: async (path: string = globalState.activeFilePath) => {
+      const file = globalState.project.files[path];
+      if (!file) return;
+      clearTimeout(autoSaveTimers.get(path));
+      const s = globalState.editorSettings;
+      // Format through the live editor when the language has a formatter (JSON, JS/TS, HTML, CSS)
+      if (s.formatOnSave) await formatDocumentIn(path);
+      const transformed = applySaveTransforms(file.content, s);
+      if (transformed !== file.content) actions.updateFileContent(path, transformed);
+      savedContent.set(path, file.content);
       globalState.dirtyFiles = globalState.dirtyFiles.filter((t) => t !== path);
       saveToLocalStorage(globalState.project);
       emit();
     },
 
     saveAllFiles: () => {
-      globalState.dirtyFiles = [];
+      [...globalState.dirtyFiles].forEach((p) => void actions.saveFile(p));
+    },
+
+    revertFile: (path: string = globalState.activeFilePath) => {
+      const saved = savedContent.get(path);
+      if (saved === undefined || !globalState.project.files[path]) return;
+      actions.updateFileContent(path, saved);
+    },
+
+    newUntitledFile: (language: string = globalState.editorSettings.defaultLanguage) => {
+      const ext = defaultExtension(language);
+      let n = 1;
+      while (globalState.project.files[`Untitled-${n}${ext}`]) n++;
+      actions.createFile(`Untitled-${n}${ext}`, NEW_FILE_TEMPLATES[language] ?? '');
+    },
+
+    importFiles: (files: Record<string, string>, workspaceName?: string) => {
+      const paths = Object.keys(files);
+      if (paths.length === 0) return;
+      if (workspaceName) {
+        actions.loadTemplateProject(workspaceName, files);
+        return;
+      }
+      paths.forEach((p) => {
+        globalState.project.files[p] = { path: p, content: files[p], lastModified: Date.now() };
+        savedContent.set(p, files[p]);
+      });
+      globalState.syncStatus = 'PENDING';
       saveToLocalStorage(globalState.project);
+      actions.setActiveFilePath(paths[0]);
+    },
+
+    setLanguageOverride: (path: string, language: string | null) => {
+      const { [path]: _old, ...rest } = globalState.languageOverrides;
+      globalState.languageOverrides = language ? { ...rest, [path]: language } : rest;
+      emit();
+    },
+
+    toggleZenMode: () => {
+      globalState.zenMode = !globalState.zenMode;
+      emit();
+    },
+
+    toggleFullScreen: () => {
+      if (document.fullscreenElement) void document.exitFullscreen();
+      else void document.documentElement.requestFullscreen?.();
+    },
+
+    setFullScreenState: (on: boolean) => {
+      globalState.isFullScreen = on;
+      emit();
+    },
+
+    showQuickPick: (pick: QuickPick | null) => {
+      globalState.quickPick = pick;
+      globalState.isCommandPaletteOpen = !!pick;
+      globalState.paletteQuery = '';
+      emit();
+    },
+
+    openSettings: (section: string = 'commonly-used') => {
+      globalState.settingsSection = section;
+      globalState.activeNavTab = 'settings';
+      emit();
+    },
+
+    cleanBuild: () => {
+      globalState.buildLogs = ['[CLEAN] Removed build outputs and cached artifacts.'];
+      globalState.lastArtifact = null;
+      globalState.buildStatus = 'IDLE';
+      globalState.diagnostics = [];
       emit();
     },
 
@@ -863,12 +827,14 @@ export function useWorkspaceStore(): [WorkspaceState, {
     },
 
     setTheme: (theme: ThemeName) => {
+      if (!availableThemes(globalState.extensions).includes(theme)) return;
       globalState.theme = theme;
       emit();
     },
 
     setEditorSettings: (settings: Partial<EditorCustomization>) => {
       globalState.editorSettings = { ...globalState.editorSettings, ...settings };
+      if (settings.defaultBaudRate) globalState.serialBaudRate = settings.defaultBaudRate;
       emit();
     },
 
@@ -996,6 +962,7 @@ export function useWorkspaceStore(): [WorkspaceState, {
     setCommandPaletteOpen: (open: boolean, initialQuery: string = '>') => {
       globalState.isCommandPaletteOpen = open;
       globalState.paletteQuery = initialQuery;
+      globalState.quickPick = null;
       emit();
     },
 
@@ -1009,8 +976,11 @@ export function useWorkspaceStore(): [WorkspaceState, {
       emit();
     },
 
-    formatCurrentCode: () => {
+    formatCurrentCode: async () => {
+      // Real formatter first (JSON, JS/TS, HTML, CSS); the indenter below is a fallback for C-like code.
+      if (await formatDocumentIn(globalState.activeFilePath)) return;
       const file = globalState.project.files[globalState.activeFilePath];
+      if (!/\.(c|cc|cpp|h|hpp|ino|java|cs|js|ts|go|rs|kt|dart|php)$/i.test(globalState.activeFilePath)) return;
       if (file && file.content) {
         // Prettier-like indentation & bracket normalization for embedded C/C++
         const lines = file.content.split('\n');
@@ -1041,6 +1011,8 @@ export function useWorkspaceStore(): [WorkspaceState, {
       globalState.activeFilePath = globalState.openTabs[0] || '';
       globalState.splitFilePath = null;
       globalState.dirtyFiles = [];
+      globalState.languageOverrides = {};
+      resetSavedContent(globalState.project);
       globalState.syncStatus = 'SYNCED';
       saveToLocalStorage(globalState.project);
       emit();
@@ -1061,7 +1033,10 @@ export function useWorkspaceStore(): [WorkspaceState, {
       globalState.activeFilePath = globalState.openTabs[0] || '';
       globalState.splitFilePath = null;
       globalState.dirtyFiles = [];
+      globalState.languageOverrides = {};
+      resetSavedContent(globalState.project);
       globalState.syncStatus = 'PENDING';
+      globalState.activeNavTab = 'explorer';
       saveToLocalStorage(globalState.project);
       emit();
     },
@@ -1220,39 +1195,24 @@ void initWiFi() {
 
     installExtension: (id: string, createSample: boolean = false) => {
       const ext = globalState.extensions.find((e) => e.id === id);
-      if (ext) {
-        ext.installed = true;
-        ext.enabled = true;
-        if (createSample && ext.sampleTemplate && !globalState.project.files[ext.sampleTemplate.filename]) {
-          globalState.project.files[ext.sampleTemplate.filename] = {
-            path: ext.sampleTemplate.filename,
-            content: ext.sampleTemplate.content,
-          };
-          if (!globalState.openTabs.includes(ext.sampleTemplate.filename)) {
-            globalState.openTabs.push(ext.sampleTemplate.filename);
-          }
-          globalState.activeFilePath = ext.sampleTemplate.filename;
-        }
-        emit();
-        saveToLocalStorage(globalState.project);
+      if (!ext) return;
+      globalState.extensions = globalState.extensions.map((e) => (e.id === id ? { ...e, installed: true, enabled: true } : e));
+      emit();
+      if (createSample && ext.sampleTemplate) {
+        actions.createFile(ext.sampleTemplate.filename, ext.sampleTemplate.content);
       }
     },
 
     uninstallExtension: (id: string) => {
-      const ext = globalState.extensions.find((e) => e.id === id);
-      if (ext) {
-        ext.installed = false;
-        ext.enabled = false;
-        emit();
-      }
+      globalState.extensions = globalState.extensions.map((e) => (e.id === id ? { ...e, installed: false, enabled: false } : e));
+      dropUnavailableTheme();
+      emit();
     },
 
     toggleExtension: (id: string) => {
-      const ext = globalState.extensions.find((e) => e.id === id);
-      if (ext) {
-        ext.enabled = !ext.enabled;
-        emit();
-      }
+      globalState.extensions = globalState.extensions.map((e) => (e.id === id ? { ...e, enabled: !e.enabled } : e));
+      dropUnavailableTheme();
+      emit();
     },
 
     setExtensionSearchQuery: (query: string) => {
