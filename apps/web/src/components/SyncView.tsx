@@ -77,7 +77,7 @@ export const SyncView: React.FC = () => {
                 </code>
                 <button
                   onClick={() => {
-                    alert('Kept local changes.');
+                    actions.notify('info', 'Kept local changes (simulated sync).');
                     setIsSimulatingConflict(false);
                   }}
                   className="w-full mt-2 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-semibold"
@@ -94,7 +94,7 @@ export const SyncView: React.FC = () => {
                 </code>
                 <button
                   onClick={() => {
-                    alert('Adopted cloud remote changes.');
+                    actions.notify('info', 'Adopted cloud changes (simulated sync).');
                     setIsSimulatingConflict(false);
                   }}
                   className="w-full mt-2 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded text-xs font-semibold"
@@ -141,7 +141,7 @@ export const SyncView: React.FC = () => {
                 </div>
 
                 <button
-                  onClick={() => alert(`Inspecting diff for ${rev.rev}`)}
+                  onClick={() => actions.notify('info', `Revision diffs are not available yet (sample revision ${rev.rev}).`)}
                   className="px-2 py-1 bg-[#21262d] hover:bg-[#30363d] text-[#8b949e] hover:text-white rounded text-[11px]"
                 >
                   View Diff

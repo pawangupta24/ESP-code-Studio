@@ -1,101 +1,158 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useWorkspaceStore } from '../stores/useWorkspaceStore';
-import {
-  Files,
-  Search,
-  GitBranch,
-  PlayCircle,
-  Blocks,
-  Cpu,
-  Settings,
-  Bot,
-} from 'lucide-react';
+import { formatShortcut } from '../utils/platform';
+import { pickColorTheme } from '../quickPicks';
+import { Files, Search, GitBranch, PlayCircle, Blocks, Cpu, Settings, Bot, CircleUserRound } from 'lucide-react';
 
 interface ActivityBarProps {
   activeView: string;
   onSelectView: (view: string) => void;
 }
 
+type MenuEntry = { label: string; hint?: string; run: () => void } | null;
+
+/** Small popup menu that opens to the right of the activity bar (Manage / Accounts). */
+const PopupMenu: React.FC<{ items: MenuEntry[]; onClose: () => void; header?: React.ReactNode }> = ({ items, onClose, header }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const close = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && onClose();
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('mousedown', close);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', close);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, []);
+  return (
+    <div ref={ref} className="absolute left-full bottom-0 ml-1 min-w-[260px] bg-[#161b22] border border-[#30363d] rounded-md shadow-2xl py-1 z-50 font-sans text-[12px] text-[#c9d1d9]">
+      {header}
+      {items.map((item, i) =>
+        item === null ? (
+          <div key={i} className="my-1 border-t border-[#30363d]" />
+        ) : (
+          <button
+            key={item.label}
+            onClick={() => {
+              onClose();
+              item.run();
+            }}
+            className="w-full text-left px-3 py-1 flex justify-between gap-6 hover:bg-[#1f6feb] hover:text-white"
+          >
+            <span>{item.label}</span>
+            {item.hint && <span className="opacity-60">{formatShortcut(item.hint)}</span>}
+          </button>
+        )
+      )}
+    </div>
+  );
+};
+
 export const ActivityBar: React.FC<ActivityBarProps> = ({ activeView, onSelectView }) => {
   const [state, actions] = useWorkspaceStore();
+  const [menu, setMenu] = useState<'manage' | 'accounts' | null>(null);
 
   const primaryItems = [
-    { id: 'explorer', label: 'Explorer (Ctrl+Shift+E)', icon: Files },
-    { id: 'search', label: 'Search & Replace (Ctrl+Shift+F)', icon: Search },
-    { id: 'git', label: 'Source Control (Ctrl+Shift+G)', icon: GitBranch, badge: state.stagedFiles.length > 0 ? state.stagedFiles.length : undefined },
-    { id: 'debug', label: 'Run & Hardware Debug', icon: PlayCircle },
-    { id: 'extensions', label: 'Extensions Marketplace (Ctrl+Shift+X)', icon: Blocks },
-    { id: 'esp32', label: 'ESP32 Hardware Tools (Pinout, FreeRTOS, OTA)', icon: Cpu },
+    // Explorer badge = unsaved files, like VS Code
+    { id: 'explorer', label: 'Explorer (Ctrl+Shift+E)', icon: Files, badge: state.dirtyFiles.length || undefined },
+    { id: 'search', label: 'Search (Ctrl+Shift+F)', icon: Search },
+    { id: 'git', label: 'Source Control (Ctrl+Shift+G)', icon: GitBranch, badge: state.stagedFiles.length || undefined },
+    { id: 'debug', label: 'Run and Debug (Ctrl+Shift+D)', icon: PlayCircle },
+    { id: 'extensions', label: 'Extensions (Ctrl+Shift+X)', icon: Blocks },
+    { id: 'esp32', label: 'ESP32 Hardware Tools', icon: Cpu },
   ];
 
+  const manageItems: MenuEntry[] = [
+    { label: 'Command Palette...', hint: 'Ctrl+Shift+P', run: () => actions.setCommandPaletteOpen(true) },
+    null,
+    { label: 'Settings', hint: 'Ctrl+,', run: () => actions.openSettings() },
+    { label: 'Extensions', hint: 'Ctrl+Shift+X', run: () => onSelectView('extensions') },
+    { label: 'Keyboard Shortcuts', hint: 'Ctrl+K Ctrl+S', run: () => actions.openSettings('keybindings') },
+    null,
+    { label: 'Color Theme', hint: 'Ctrl+K Ctrl+T', run: () => pickColorTheme(state, actions) },
+    null,
+    { label: 'Welcome', run: actions.openWelcome },
+  ];
+
+  const accountItems: MenuEntry[] = state.isLoggedIn
+    ? [
+        { label: 'Manage Account...', run: () => actions.setAuthModalOpen(true) },
+        null,
+        { label: 'Sign Out', run: actions.logoutUser },
+      ]
+    : [{ label: 'Sign in to Sync Settings & Cloud Builds...', run: () => actions.setAuthModalOpen(true) }];
+
+  const badge = (n?: number) =>
+    n ? (
+      <span className="absolute bottom-1 right-1 px-1 min-w-[16px] h-4 rounded-full bg-[#1f6feb] text-white text-[9px] font-bold flex items-center justify-center">
+        {n}
+      </span>
+    ) : null;
+
   return (
-    <div className="w-12 bg-[#0d1117] border-r border-[#30363d] flex flex-col items-center py-2 select-none justify-between z-10">
-      {/* Top Activities */}
-      <div className="flex flex-col space-y-2.5">
+    <div className="w-12 bg-[#0d1117] border-r border-[#30363d] flex flex-col items-center py-1 select-none justify-between z-10">
+      <div className="flex flex-col w-full">
         {primaryItems.map((item) => {
           const Icon = item.icon;
           const isActive = activeView === item.id;
-
           return (
             <button
               key={item.id}
               onClick={() => onSelectView(item.id)}
               title={item.label}
-              className={`p-2.5 rounded-lg transition-all relative group ${
-                isActive
-                  ? 'text-white bg-[#21262d] shadow-sm'
-                  : 'text-[#8b949e] hover:text-white hover:bg-[#161b22]'
-              }`}
+              className={`h-12 w-full flex items-center justify-center relative ${isActive ? 'text-white' : 'text-[#8b949e] hover:text-white'}`}
             >
-              {isActive && (
-                <div className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-6 bg-[#58a6ff] rounded-r"></div>
-              )}
-              <Icon className="w-5 h-5" />
-              {item.badge !== undefined && (
-                <span className="absolute top-1 right-1 px-1 min-w-[14px] h-3.5 rounded-full bg-[#1f6feb] text-white text-[9px] font-bold flex items-center justify-center">
-                  {item.badge}
-                </span>
-              )}
+              {isActive && <span className="absolute left-0 top-0 bottom-0 w-0.5 bg-[#58a6ff]" />}
+              <Icon className="w-6 h-6" strokeWidth={1.5} />
+              {badge(item.badge)}
             </button>
           );
         })}
       </div>
 
-      {/* Bottom Activities: AI Copilot, Settings, Account */}
-      <div className="flex flex-col items-center space-y-2">
-        {/* Embedded AI Copilot Button */}
+      <div className="flex flex-col w-full">
         <button
           onClick={actions.toggleAiPanel}
-          title="Toggle Embedded AI Copilot (Claude, Gemini, GPT-4o)"
-          className={`p-2 rounded-lg transition-colors relative ${
-            state.isAiPanelOpen
-              ? 'text-purple-300 bg-purple-950/80 border border-purple-800'
-              : 'text-purple-400 hover:text-purple-300 hover:bg-[#161b22]'
-          }`}
+          title="Toggle AI Copilot (Ctrl+Shift+A)"
+          className={`h-12 w-full flex items-center justify-center ${state.isAiPanelOpen ? 'text-purple-300' : 'text-purple-400/80 hover:text-purple-300'}`}
         >
-          <Bot className="w-5 h-5" />
+          <Bot className="w-6 h-6" strokeWidth={1.5} />
         </button>
 
-        {/* Settings Button */}
-        <button
-          onClick={() => onSelectView('settings')}
-          title="IDE & Toolchain Settings"
-          className={`p-2 rounded-lg transition-colors ${
-            state.activeNavTab === 'settings'
-              ? 'text-[#58a6ff] bg-[#21262d]'
-              : 'text-[#8b949e] hover:text-white hover:bg-[#161b22]'
-          }`}
-        >
-          <Settings className="w-5 h-5" />
-        </button>
+        <div className="relative">
+          <button
+            onClick={() => setMenu(menu === 'accounts' ? null : 'accounts')}
+            title={state.isLoggedIn ? `${state.user.name} (${state.user.plan})` : 'Accounts'}
+            className={`h-12 w-full flex items-center justify-center ${menu === 'accounts' ? 'text-white' : 'text-[#8b949e] hover:text-white'}`}
+          >
+            <CircleUserRound className="w-6 h-6" strokeWidth={1.5} />
+          </button>
+          {menu === 'accounts' && (
+            <PopupMenu
+              items={accountItems}
+              onClose={() => setMenu(null)}
+              header={
+                state.isLoggedIn ? (
+                  <div className="px-3 py-1.5 text-[11px] text-[#8b949e] border-b border-[#30363d] mb-1">
+                    {state.user.name} <span className="opacity-70">({state.user.plan})</span>
+                  </div>
+                ) : undefined
+              }
+            />
+          )}
+        </div>
 
-        {/* User Account Avatar */}
-        <div
-          onClick={() => actions.setAuthModalOpen(true)}
-          title={`${state.user.name} (${state.user.plan}) - Click to manage account`}
-          className="w-7 h-7 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white text-[10px] font-bold border border-[#30363d] cursor-pointer hover:opacity-85 shadow-sm"
-        >
-          ES
+        <div className="relative">
+          <button
+            onClick={() => setMenu(menu === 'manage' ? null : 'manage')}
+            title="Manage"
+            className={`h-12 w-full flex items-center justify-center ${
+              menu === 'manage' || state.activeNavTab === 'settings' ? 'text-white' : 'text-[#8b949e] hover:text-white'
+            }`}
+          >
+            <Settings className="w-6 h-6" strokeWidth={1.5} />
+          </button>
+          {menu === 'manage' && <PopupMenu items={manageItems} onClose={() => setMenu(null)} />}
         </div>
       </div>
     </div>

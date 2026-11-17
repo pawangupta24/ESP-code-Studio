@@ -28,7 +28,9 @@ import { WelcomeTour } from './components/WelcomeTour';
 import { CommandPalette } from './components/CommandPalette';
 import { AiAssistantPanel } from './components/AiAssistantPanel';
 import { LibraryManager } from './components/LibraryManager';
-import { useWorkspaceStore, NavTab } from './stores/useWorkspaceStore';
+import { useWorkspaceStore, NavTab, WELCOME_TAB, focusedPath } from './stores/useWorkspaceStore';
+import { Notifications, Dialog, InputBox } from './components/WorkbenchOverlays';
+import { readTextFiles, isFileDrag } from './utils/fileImport';
 import { pickColorTheme, pickLanguageMode } from './quickPicks';
 import { THEME_PALETTES } from './themeTokens';
 import {
@@ -62,8 +64,37 @@ export const App: React.FC = () => {
   const setActivityView = actions.setSidebarView;
   const stateRef = useRef(state);
   stateRef.current = state;
-  const [cursorPos, setCursorPos] = useState({ line: 1, col: 1 });
   const palette = THEME_PALETTES[state.theme] || THEME_PALETTES['github-dark'];
+
+  // Window title like VS Code: "● file.cpp - project - ESP Studio"
+  useEffect(() => {
+    const path = focusedPath(state);
+    const name = path === WELCOME_TAB ? 'Welcome' : path.split('/').pop();
+    const dirty = state.dirtyFiles.includes(path) ? '● ' : '';
+    document.title = [name && `${dirty}${name}`, state.project.metadata.name, 'ESP Studio'].filter(Boolean).join(' - ');
+  }, [state.activeFilePath, state.splitFilePath, state.activeGroup, state.dirtyFiles, state.project.metadata.name]);
+
+  // Drop files from the OS onto the editor area to open them
+  const [fileDragOver, setFileDragOver] = useState(false);
+  const onEditorDrop = async (e: React.DragEvent) => {
+    if (!isFileDrag(e)) return;
+    e.preventDefault();
+    setFileDragOver(false);
+    const { files, skipped } = await readTextFiles(Array.from(e.dataTransfer.files), (f) => f.name);
+    const paths = Object.keys(files);
+    const clashes = paths.filter((p) => state.project.files[p]);
+    if (clashes.length) {
+      const choice = await actions.showDialog({
+        severity: 'warning',
+        message: clashes.length === 1 ? `Replace '${clashes[0]}'?` : `Replace ${clashes.length} existing files?`,
+        detail: clashes.join('\n'),
+        buttons: ['Replace', 'Cancel'],
+      });
+      if (choice !== 0) return;
+    }
+    if (paths.length) actions.importFiles(files);
+    if (skipped) actions.notify('warning', `${skipped} file(s) skipped (binary, build output or larger than 2 MB).`);
+  };
 
   // Resizable Section Dimensions (with local storage persistence)
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
@@ -140,6 +171,8 @@ export const App: React.FC = () => {
       if (!ctrl) {
         if (k === 'escape' && s.zenMode && !s.isCommandPaletteOpen) return consume(actions.toggleZenMode);
         if (k === 'f5' && !e.shiftKey) return consume(() => void actions.toggleSerialConnection());
+        if (e.altKey && !e.shiftKey && k === 'arrowleft') return consume(actions.goBack);
+        if (e.altKey && !e.shiftKey && k === 'arrowright') return consume(actions.goForward);
         if (k === 'f11') return consume(actions.toggleFullScreen);
         if (e.altKey && !e.shiftKey && k === 'z') return consume(() => actions.setEditorSettings({ wordWrap: !s.editorSettings.wordWrap }));
         return;
@@ -150,8 +183,11 @@ export const App: React.FC = () => {
       }
 
       const tabStep = (delta: number) => {
-        const n = s.openTabs.length;
-        if (n > 1) actions.setActiveFilePath(s.openTabs[(s.openTabs.indexOf(s.activeFilePath) + delta + n) % n]);
+        // Cycle tabs within the focused editor group
+        const inSplit = s.activeGroup === 1 && !!s.splitFilePath;
+        const tabs = inSplit ? s.splitTabs : s.openTabs;
+        const next = tabs[(tabs.indexOf(focusedPath(s)) + delta + tabs.length) % tabs.length];
+        if (tabs.length > 1) actions.openFile(next);
       };
 
       const shifted: Record<string, () => void> = {
@@ -175,7 +211,10 @@ export const App: React.FC = () => {
         j: () => actions.setBottomPanelTab(s.bottomPanelTab === 'closed' ? 'terminal' : 'closed'),
         '`': () => actions.setBottomPanelTab(s.bottomPanelTab === 'terminal' ? 'closed' : 'terminal'),
         '\\': actions.toggleSplitEditor,
-        w: () => s.activeFilePath && actions.closeTab(s.activeFilePath),
+        w: () => {
+          const path = focusedPath(s);
+          if (path) void actions.requestCloseTabs([path], s.activeGroup === 1 && s.splitFilePath ? 1 : 0);
+        },
         '=': actions.zoomIn,
         '+': actions.zoomIn,
         '-': actions.zoomOut,
@@ -438,8 +477,15 @@ export const App: React.FC = () => {
               {/* Primary Code Editor & Multi-Format Viewers */}
               <div
                 ref={editorContainerRef}
-                className="flex-1 flex overflow-hidden relative"
+                className={`flex-1 flex overflow-hidden relative ${fileDragOver ? 'ring-2 ring-inset ring-[#58a6ff] bg-[#1f6feb]/10' : ''}`}
                 style={{ pointerEvents: isDragging ? 'none' : 'auto' }}
+                onDragOver={(e) => {
+                  if (!isFileDrag(e)) return;
+                  e.preventDefault();
+                  setFileDragOver(true);
+                }}
+                onDragLeave={(e) => e.currentTarget === e.target && setFileDragOver(false)}
+                onDrop={(e) => void onEditorDrop(e)}
               >
                 {state.splitFilePath ? (
                   <>
@@ -447,7 +493,6 @@ export const App: React.FC = () => {
                     <div style={{ width: `${splitRatio * 100}%` }} className="h-full flex overflow-hidden">
                       <EditorGroup
                         activePath={state.activeFilePath}
-                        onCursorChange={(line, col) => setCursorPos({ line, col })}
                       />
                     </div>
 
@@ -470,7 +515,6 @@ export const App: React.FC = () => {
                 ) : (
                   <EditorGroup
                     activePath={state.activeFilePath}
-                    onCursorChange={(line, col) => setCursorPos({ line, col })}
                   />
                 )}
 
@@ -616,7 +660,7 @@ export const App: React.FC = () => {
       </div>
 
       {/* Bottom VS Code Status Bar */}
-      {!zen && state.editorSettings.showStatusBar && <StatusBar cursorLine={cursorPos.line} cursorCol={cursorPos.col} />}
+      {!zen && state.editorSettings.showStatusBar && <StatusBar />}
 
       {/* Sync Dialog Modal */}
       <SyncModal />
@@ -629,6 +673,11 @@ export const App: React.FC = () => {
 
       {/* Command Palette (Ctrl+K / Ctrl+Shift+P) */}
       <CommandPalette />
+
+      {/* VS Code workbench overlays: toasts / notification center, modal dialog, input box */}
+      <Notifications />
+      <InputBox />
+      <Dialog />
     </div>
   );
 };

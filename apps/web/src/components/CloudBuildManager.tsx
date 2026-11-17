@@ -100,7 +100,7 @@ export const CloudBuildManager: React.FC = () => {
                   <div className="text-[#8b949e] text-[10px]">Offset: <code className="text-[#58a6ff]">{seg.offset}</code></div>
                   <div className="text-[10px] text-slate-400">Size: {(seg.sizeBytes / 1024).toFixed(1)} KB</div>
                   <button
-                    onClick={() => alert(`Downloading artifact: ${seg.path}`)}
+                    onClick={() => actions.notify('info', `Downloads are not available: '${seg.path}' comes from the simulated build.`)}
                     className="w-full mt-2 py-1 bg-[#21262d] hover:bg-[#30363d] text-white rounded text-[10px] flex items-center justify-center space-x-1"
                   >
                     <Download className="w-3 h-3 text-[#58a6ff]" />
@@ -117,7 +117,7 @@ export const CloudBuildManager: React.FC = () => {
                 <div className="text-[10px] text-[#8b949e]">Consolidated flash image starting at 0x00000000 for manufacturing & factory flashing</div>
               </div>
               <button
-                onClick={() => alert('Downloading merged factory image: merged-firmware.bin')}
+                onClick={() => actions.notify('info', 'Downloads are not available: merged-firmware.bin comes from the simulated build.')}
                 className="px-3 py-1.5 bg-[#1f6feb] hover:bg-[#388bfd] text-white rounded text-xs font-semibold flex items-center space-x-1.5"
               >
                 <Download className="w-3.5 h-3.5" />

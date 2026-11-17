@@ -27,6 +27,46 @@ export interface QuickPick {
   onPick: (id: string) => void;
 }
 
+// ---- Workbench services (VS Code's notification toasts, modal dialogs and input boxes) ----
+export type Severity = 'info' | 'warning' | 'error';
+export interface NotificationAction {
+  label: string;
+  run: () => void;
+}
+export interface AppNotification {
+  id: number;
+  severity: Severity;
+  message: string;
+  source?: string;
+  actions?: NotificationAction[];
+  time: number;
+}
+export interface DialogRequest {
+  message: string;
+  detail?: string;
+  severity: Severity;
+  buttons: string[];
+  cancelIndex: number;
+  resolve: (index: number) => void;
+}
+export interface InputBoxRequest {
+  prompt: string;
+  placeholder?: string;
+  value: string;
+  /** Pre-select the file name without its extension, like VS Code's rename box */
+  selectBaseName?: boolean;
+  validate?: (value: string) => string | null;
+  resolve: (value: string | undefined) => void;
+}
+
+/** Virtual editor tab that shows the Welcome page instead of a file. */
+export const WELCOME_TAB = 'welcome:';
+
+/** File shown in the focused editor group (what Save, Format, the status bar etc. act on). */
+export function focusedPath(s: { activeGroup: 0 | 1; splitFilePath: string | null; activeFilePath: string }): string {
+  return s.activeGroup === 1 && s.splitFilePath ? s.splitFilePath : s.activeFilePath;
+}
+
 export type NavTab = 
   | 'explorer' 
   | 'devices' 
@@ -174,10 +214,22 @@ export interface WorkspaceState {
   isFullScreen: boolean;
   quickPick: QuickPick | null;
   settingsSection: string; // which Settings category to show when opened
+  notifications: AppNotification[];
+  toastIds: number[]; // notifications currently shown as toasts (all stay in the center)
+  isNotificationCenterOpen: boolean;
+  dialog: DialogRequest | null;
+  inputBox: InputBoxRequest | null;
+  previewTab: string | null; // italic tab replaced by the next preview open
+  navHistory: string[]; // editor history for Go Back / Go Forward
+  navIndex: number;
+  recentFiles: string[];
+  cursor: { line: number; col: number; selected: number };
   bottomPanelTab: 'serial' | 'plotter' | 'terminal' | 'build' | 'problems' | 'closed';
   searchQuery: string;
   zoomLevel: number;
-  splitFilePath: string | null;
+  splitFilePath: string | null; // active file of the right editor group; null = no split
+  splitTabs: string[]; // tabs of the right editor group (the left group uses openTabs)
+  activeGroup: 0 | 1; // editor group that has focus: 0 = left, 1 = right
   
   // AI Copilot
   activeAiModel: AiModelId;
@@ -213,6 +265,7 @@ function pickUiState(s: WorkspaceState) {
     openTabs: s.openTabs,
     activeFilePath: s.activeFilePath,
     sidebarView: s.sidebarView,
+    recentFiles: s.recentFiles,
     languageOverrides: s.languageOverrides,
     extensions: Object.fromEntries(s.extensions.map((e) => [e.id, { installed: e.installed, enabled: e.enabled }])),
   };
@@ -227,6 +280,9 @@ function loadUiState(project: Project): Partial<WorkspaceState> {
     if (typeof ui.theme === 'string' && availableThemes(out.extensions).includes(ui.theme)) out.theme = ui.theme;
     if (ui.editorSettings && typeof ui.editorSettings === 'object') {
       out.editorSettings = normalizeSettings(ui.editorSettings);
+    }
+    if (Array.isArray(ui.recentFiles)) {
+      out.recentFiles = ui.recentFiles.filter((p: unknown) => typeof p === 'string' && project.files[p]).slice(0, 10);
     }
     if (ui.languageOverrides && typeof ui.languageOverrides === 'object') {
       out.languageOverrides = Object.fromEntries(
@@ -377,10 +433,22 @@ let globalState: WorkspaceState = {
   isFullScreen: false,
   quickPick: null,
   settingsSection: 'commonly-used',
+  notifications: [],
+  toastIds: [],
+  isNotificationCenterOpen: false,
+  dialog: null,
+  inputBox: null,
+  previewTab: null,
+  navHistory: [],
+  navIndex: -1,
+  recentFiles: [],
+  cursor: { line: 1, col: 1, selected: 0 },
   bottomPanelTab: 'serial',
   searchQuery: '',
   zoomLevel: 100,
   splitFilePath: null,
+  splitTabs: [],
+  activeGroup: 0,
   
   activeAiModel: 'gemini-1.5-flash',
   isAiPanelOpen: false,
@@ -409,6 +477,8 @@ const savedContent = new Map<string, string>(
   Object.entries(initialProject.files).map(([p, f]) => [p, f.content])
 );
 const autoSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+let notificationSeq = 0;
+let navigating = false; // true while Go Back/Forward re-opens a file (don't record it again)
 
 function resetSavedContent(project: Project) {
   savedContent.clear();
@@ -483,11 +553,11 @@ flashProvider.onProgress((p) => {
 export function useWorkspaceStore(): [WorkspaceState, {
   setActiveFilePath: (path: string) => void;
   updateFileContent: (path: string, content: string) => void;
-  createFile: (path: string, initialContent?: string) => void;
+  createFile: (path: string, initialContent?: string, open?: boolean) => void;
   deleteFile: (path: string) => void;
   renameFile: (oldPath: string, newPath: string) => void;
   openTab: (path: string) => void;
-  closeTab: (path: string) => void;
+  closeTab: (path: string, group?: 0 | 1) => void;
   setActiveNavTab: (tab: NavTab) => void;
   setBuildEngineMode: (mode: BuildEngineMode) => void;
   setTargetBoard: (board: string) => void;
@@ -511,9 +581,9 @@ export function useWorkspaceStore(): [WorkspaceState, {
   setSidebarView: (view: string) => void;
   saveFile: (path?: string) => void;
   saveAllFiles: () => void;
-  closeOtherTabs: (path: string) => void;
-  closeAllTabs: () => void;
-  moveTab: (from: string, to: string) => void;
+  closeOtherTabs: (path: string, group?: 0 | 1) => void;
+  closeAllTabs: (group?: 0 | 1) => void;
+  moveTab: (from: string, to: string, group?: 0 | 1) => void;
   setBottomPanelTab: (tab: WorkspaceState['bottomPanelTab']) => void;
   setBaudRate: (baud: number) => void;
   formatCurrentCode: () => void;
@@ -549,6 +619,26 @@ export function useWorkspaceStore(): [WorkspaceState, {
   showQuickPick: (pick: QuickPick | null) => void;
   openSettings: (section?: string) => void;
   cleanBuild: () => void;
+  openFile: (path: string, opts?: { preview?: boolean }) => void;
+  pinTab: (path: string) => void;
+  openWelcome: () => void;
+  requestCloseTabs: (paths: string[], group?: 0 | 1) => Promise<boolean>;
+  closeTabsToTheRight: (path: string, group?: 0 | 1) => void;
+  setActiveGroup: (group: 0 | 1) => void;
+  closeSplit: () => void;
+  goBack: () => void;
+  goForward: () => void;
+  clearRecentFiles: () => void;
+  setCursor: (line: number, col: number, selected: number) => void;
+  notify: (severity: Severity, message: string, opts?: { actions?: NotificationAction[]; source?: string }) => number;
+  dismissNotification: (id: number) => void;
+  hideToast: (id: number) => void;
+  clearNotifications: () => void;
+  setNotificationCenterOpen: (open: boolean) => void;
+  showDialog: (opts: { message: string; detail?: string; severity?: Severity; buttons: string[]; cancelIndex?: number }) => Promise<number>;
+  resolveDialog: (index: number) => void;
+  showInputBox: (opts: Omit<InputBoxRequest, 'resolve'>) => Promise<string | undefined>;
+  resolveInputBox: (value: string | undefined) => void;
 }] {
   const [, setTick] = useState(0);
 
@@ -571,20 +661,201 @@ export function useWorkspaceStore(): [WorkspaceState, {
     if (!availableThemes(globalState.extensions).includes(globalState.theme)) globalState.theme = 'github-dark';
   };
 
+  const recordNavigation = (path: string) => {
+    if (navigating || globalState.navHistory[globalState.navIndex] === path) return;
+    const history = [...globalState.navHistory.slice(0, globalState.navIndex + 1), path].slice(-50);
+    globalState.navHistory = history;
+    globalState.navIndex = history.length - 1;
+    if (path !== WELCOME_TAB) {
+      globalState.recentFiles = [path, ...globalState.recentFiles.filter((p) => p !== path)].slice(0, 10);
+    }
+  };
+
+  const navigateTo = (index: number) => {
+    const path = globalState.navHistory[index];
+    if (path === undefined) return;
+    globalState.navIndex = index;
+    navigating = true;
+    // Files closed since then are reopened, deleted ones are skipped
+    if (path === WELCOME_TAB || globalState.project.files[path]) actions.openFile(path);
+    navigating = false;
+    emit();
+  };
+
   const actions = {
-    setActiveFilePath: (path: string) => {
-      globalState.activeFilePath = path;
-      if (!globalState.openTabs.includes(path)) {
-        globalState.openTabs = [...globalState.openTabs, path];
+    setActiveFilePath: (path: string) => actions.openFile(path),
+
+    /**
+     * Open a file in the focused editor group. `preview` reuses the italic preview tab, like a
+     * single click in VS Code (left group only).
+     */
+    openFile: (path: string, opts: { preview?: boolean } = {}) => {
+      if (globalState.splitFilePath && globalState.activeGroup === 1) {
+        if (!globalState.splitTabs.includes(path)) globalState.splitTabs = [...globalState.splitTabs, path];
+        globalState.splitFilePath = path;
+        recordNavigation(path);
+        showEditor();
+        emit();
+        return;
       }
+      const preview = !!opts.preview && globalState.editorSettings.enablePreview;
+      const tabs = globalState.openTabs;
+      if (!tabs.includes(path)) {
+        const old = globalState.previewTab;
+        const replaceable = preview && old && tabs.includes(old) && !globalState.dirtyFiles.includes(old);
+        globalState.openTabs = replaceable ? tabs.map((t) => (t === old ? path : t)) : [...tabs, path];
+        if (preview) globalState.previewTab = path;
+      }
+      globalState.activeFilePath = path;
+      recordNavigation(path);
       showEditor();
       emit();
+    },
+
+    pinTab: (path: string) => {
+      if (globalState.previewTab !== path) return;
+      globalState.previewTab = null;
+      emit();
+    },
+
+    openWelcome: () => actions.openFile(WELCOME_TAB),
+
+    setActiveGroup: (group: 0 | 1) => {
+      const g = group === 1 && globalState.splitFilePath ? 1 : 0;
+      if (globalState.activeGroup === g) return;
+      globalState.activeGroup = g;
+      emit();
+    },
+
+    closeSplit: () => {
+      globalState.splitFilePath = null;
+      globalState.splitTabs = [];
+      globalState.activeGroup = 0;
+      emit();
+    },
+
+    /**
+     * Close tabs of one editor group, asking "Save changes?" for unsaved files that are not
+     * also open in the other group. Resolves false if the user cancelled.
+     */
+    requestCloseTabs: async (paths: string[], group: 0 | 1 = 0) => {
+      const otherGroup = group === 0 ? globalState.splitTabs : globalState.openTabs;
+      const dirty = paths.filter((p) => globalState.dirtyFiles.includes(p) && !otherGroup.includes(p));
+      if (dirty.length > 0) {
+        const names = dirty.map((p) => p.split('/').pop());
+        const choice = await actions.showDialog({
+          severity: 'warning',
+          message:
+            dirty.length === 1
+              ? `Do you want to save the changes you made to ${names[0]}?`
+              : `Do you want to save the changes to the following ${dirty.length} files?`,
+          detail: (dirty.length > 1 ? names.join('\n') + '\n\n' : '') + "Your changes will be lost if you don't save them.",
+          buttons: [dirty.length === 1 ? 'Save' : 'Save All', "Don't Save", 'Cancel'],
+          cancelIndex: 2,
+        });
+        if (choice === 2) return false;
+        for (const p of dirty) {
+          if (choice === 0) await actions.saveFile(p);
+          else actions.revertFile(p);
+        }
+      }
+      paths.forEach((p) => actions.closeTab(p, group));
+      return true;
+    },
+
+    closeTabsToTheRight: (path: string, group: 0 | 1 = 0) => {
+      const tabs = group === 1 ? globalState.splitTabs : globalState.openTabs;
+      const idx = tabs.indexOf(path);
+      if (idx >= 0) void actions.requestCloseTabs(tabs.slice(idx + 1), group);
+    },
+
+    goBack: () => navigateTo(globalState.navIndex - 1),
+    goForward: () => navigateTo(globalState.navIndex + 1),
+
+    clearRecentFiles: () => {
+      globalState.recentFiles = [];
+      emit();
+    },
+
+    setCursor: (line: number, col: number, selected: number) => {
+      const c = globalState.cursor;
+      if (c.line === line && c.col === col && c.selected === selected) return;
+      globalState.cursor = { line, col, selected };
+      emit();
+    },
+
+    notify: (severity: Severity, message: string, opts: { actions?: NotificationAction[]; source?: string } = {}) => {
+      const id = ++notificationSeq;
+      globalState.notifications = [{ id, severity, message, time: Date.now(), ...opts }, ...globalState.notifications].slice(0, 50);
+      globalState.toastIds = [...globalState.toastIds, id].slice(-3);
+      emit();
+      // Like VS Code: plain info toasts fade out; warnings, errors and toasts with buttons stay
+      if (severity === 'info' && !opts.actions?.length) setTimeout(() => actions.hideToast(id), 6000);
+      return id;
+    },
+
+    dismissNotification: (id: number) => {
+      globalState.notifications = globalState.notifications.filter((n) => n.id !== id);
+      globalState.toastIds = globalState.toastIds.filter((t) => t !== id);
+      emit();
+    },
+
+    hideToast: (id: number) => {
+      if (!globalState.toastIds.includes(id)) return;
+      globalState.toastIds = globalState.toastIds.filter((t) => t !== id);
+      emit();
+    },
+
+    clearNotifications: () => {
+      globalState.notifications = [];
+      globalState.toastIds = [];
+      emit();
+    },
+
+    setNotificationCenterOpen: (open: boolean) => {
+      globalState.isNotificationCenterOpen = open;
+      if (open) globalState.toastIds = [];
+      emit();
+    },
+
+    showDialog: (opts: { message: string; detail?: string; severity?: Severity; buttons: string[]; cancelIndex?: number }) =>
+      new Promise<number>((resolve) => {
+        globalState.dialog?.resolve(globalState.dialog.cancelIndex); // only one dialog at a time
+        globalState.dialog = {
+          severity: 'info',
+          cancelIndex: opts.buttons.length - 1,
+          ...opts,
+          resolve,
+        };
+        emit();
+      }),
+
+    resolveDialog: (index: number) => {
+      const d = globalState.dialog;
+      globalState.dialog = null;
+      emit();
+      d?.resolve(index);
+    },
+
+    showInputBox: (opts: Omit<InputBoxRequest, 'resolve'>) =>
+      new Promise<string | undefined>((resolve) => {
+        globalState.inputBox?.resolve(undefined);
+        globalState.inputBox = { ...opts, resolve };
+        emit();
+      }),
+
+    resolveInputBox: (value: string | undefined) => {
+      const box = globalState.inputBox;
+      globalState.inputBox = null;
+      emit();
+      box?.resolve(value);
     },
 
     updateFileContent: (path: string, content: string) => {
       if (globalState.project.files[path]) {
         globalState.project.files[path].content = content;
         globalState.project.files[path].lastModified = Date.now();
+        if (globalState.previewTab === path) globalState.previewTab = null; // editing keeps the tab open
         const isDirty = savedContent.get(path) !== content;
         const listed = globalState.dirtyFiles.includes(path);
         if (isDirty && !listed) globalState.dirtyFiles = [...globalState.dirtyFiles, path];
@@ -602,7 +873,7 @@ export function useWorkspaceStore(): [WorkspaceState, {
       }
     },
 
-    createFile: (path: string, initialContent: string = '') => {
+    createFile: (path: string, initialContent: string = '', open: boolean = true) => {
       const normalized = path.replace(/\\/g, '/').trim();
       if (!normalized) return;
       if (globalState.project.files[normalized]) {
@@ -617,17 +888,16 @@ export function useWorkspaceStore(): [WorkspaceState, {
         lastModified: Date.now(),
       };
       savedContent.set(normalized, initialContent);
-      if (!globalState.openTabs.includes(normalized)) {
-        globalState.openTabs = [...globalState.openTabs, normalized];
-      }
-      globalState.activeFilePath = normalized;
       globalState.syncStatus = 'PENDING';
       saveToLocalStorage(globalState.project);
-      emit();
+      if (open) actions.openFile(normalized);
+      else emit();
     },
 
     deleteFile: (path: string) => {
       delete globalState.project.files[path];
+      globalState.recentFiles = globalState.recentFiles.filter((p) => p !== path);
+      if (globalState.splitTabs.includes(path)) actions.closeTab(path, 1);
       actions.closeTab(path);
       globalState.syncStatus = 'PENDING';
       saveToLocalStorage(globalState.project);
@@ -649,7 +919,11 @@ export function useWorkspaceStore(): [WorkspaceState, {
           globalState.activeFilePath = newPath;
         }
         if (globalState.splitFilePath === oldPath) globalState.splitFilePath = newPath;
+        globalState.splitTabs = globalState.splitTabs.map((t) => (t === oldPath ? newPath : t));
+        if (globalState.previewTab === oldPath) globalState.previewTab = newPath;
         globalState.dirtyFiles = globalState.dirtyFiles.map((t) => (t === oldPath ? newPath : t));
+        globalState.recentFiles = globalState.recentFiles.map((t) => (t === oldPath ? newPath : t));
+        globalState.navHistory = globalState.navHistory.map((t) => (t === oldPath ? newPath : t));
         savedContent.set(newPath, savedContent.get(oldPath) ?? file.content);
         savedContent.delete(oldPath);
         if (globalState.languageOverrides[oldPath]) {
@@ -667,47 +941,69 @@ export function useWorkspaceStore(): [WorkspaceState, {
       actions.setActiveFilePath(path);
     },
 
-    closeTab: (path: string) => {
-      // Content is already persisted, so closing keeps the edits; treat them as saved.
-      const f = globalState.project.files[path];
-      if (f) savedContent.set(path, f.content);
-      const idx = globalState.openTabs.indexOf(path);
-      globalState.openTabs = globalState.openTabs.filter((t) => t !== path);
-      if (globalState.activeFilePath === path) {
-        // Like VS Code: focus the neighbour, not the first tab
-        globalState.activeFilePath = globalState.openTabs[idx] || globalState.openTabs[idx - 1] || '';
+    /** Close a tab in one editor group (no prompt; see requestCloseTabs). */
+    closeTab: (path: string, group: 0 | 1 = 0) => {
+      const tabs = group === 1 ? globalState.splitTabs : globalState.openTabs;
+      const idx = tabs.indexOf(path);
+      const remaining = tabs.filter((t) => t !== path);
+      // Like VS Code: focus the neighbour, not the first tab
+      const neighbour = remaining[idx] || remaining[idx - 1] || '';
+
+      if (group === 1) {
+        globalState.splitTabs = remaining;
+        if (globalState.splitFilePath === path) globalState.splitFilePath = neighbour || null;
+        if (!remaining.length) actions.closeSplit(); // an empty right group closes
+      } else {
+        globalState.openTabs = remaining;
+        if (globalState.activeFilePath === path) globalState.activeFilePath = neighbour;
+        if (globalState.previewTab === path) globalState.previewTab = null;
+        // An empty left group is replaced by the right one, as VS Code collapses empty groups
+        if (!remaining.length && globalState.splitFilePath) {
+          globalState.openTabs = globalState.splitTabs;
+          globalState.activeFilePath = globalState.splitFilePath;
+          actions.closeSplit();
+        }
       }
-      if (globalState.splitFilePath === path) globalState.splitFilePath = null;
-      globalState.dirtyFiles = globalState.dirtyFiles.filter((t) => t !== path);
+
+      // Last view of the file closed: its edits are already persisted, so treat them as saved
+      if (!globalState.openTabs.includes(path) && !globalState.splitTabs.includes(path)) {
+        const f = globalState.project.files[path];
+        if (f) savedContent.set(path, f.content);
+        globalState.dirtyFiles = globalState.dirtyFiles.filter((t) => t !== path);
+      }
       emit();
     },
 
-    closeOtherTabs: (path: string) => {
-      globalState.openTabs = globalState.openTabs.filter((t) => t === path);
-      globalState.activeFilePath = path;
-      if (globalState.splitFilePath !== path) globalState.splitFilePath = null;
-      globalState.dirtyFiles = globalState.dirtyFiles.filter((t) => t === path);
-      emit();
+    closeOtherTabs: (path: string, group: 0 | 1 = 0) => {
+      const tabs = group === 1 ? globalState.splitTabs : globalState.openTabs;
+      void actions.requestCloseTabs(tabs.filter((t) => t !== path), group).then((ok) => {
+        if (!ok) return;
+        actions.setActiveGroup(group);
+        actions.openFile(path);
+      });
     },
 
-    closeAllTabs: () => {
-      globalState.openTabs = [];
-      globalState.activeFilePath = '';
-      globalState.splitFilePath = null;
-      globalState.dirtyFiles = [];
-      emit();
+    /** No group: close every editor in both groups (File > Close All Editors). */
+    closeAllTabs: (group?: 0 | 1) => {
+      if (group !== undefined) {
+        void actions.requestCloseTabs([...(group === 1 ? globalState.splitTabs : globalState.openTabs)], group);
+        return;
+      }
+      void actions.requestCloseTabs([...globalState.splitTabs], 1).then((ok) => ok && actions.requestCloseTabs([...globalState.openTabs], 0));
     },
 
-    moveTab: (from: string, to: string) => {
-      const toIdx = globalState.openTabs.indexOf(to);
-      if (from === to || toIdx < 0) return;
-      const tabs = globalState.openTabs.filter((t) => t !== from);
+    moveTab: (from: string, to: string, group: 0 | 1 = 0) => {
+      const current = group === 1 ? globalState.splitTabs : globalState.openTabs;
+      const toIdx = current.indexOf(to);
+      if (from === to || toIdx < 0 || !current.includes(from)) return;
+      const tabs = current.filter((t) => t !== from);
       tabs.splice(toIdx, 0, from);
-      globalState.openTabs = tabs;
+      if (group === 1) globalState.splitTabs = tabs;
+      else globalState.openTabs = tabs;
       emit();
     },
 
-    saveFile: async (path: string = globalState.activeFilePath) => {
+    saveFile: async (path: string = focusedPath(globalState)) => {
       const file = globalState.project.files[path];
       if (!file) return;
       clearTimeout(autoSaveTimers.get(path));
@@ -726,7 +1022,7 @@ export function useWorkspaceStore(): [WorkspaceState, {
       [...globalState.dirtyFiles].forEach((p) => void actions.saveFile(p));
     },
 
-    revertFile: (path: string = globalState.activeFilePath) => {
+    revertFile: (path: string = focusedPath(globalState)) => {
       const saved = savedContent.get(path);
       if (saved === undefined || !globalState.project.files[path]) return;
       actions.updateFileContent(path, saved);
@@ -876,6 +1172,14 @@ export function useWorkspaceStore(): [WorkspaceState, {
         globalState.isBuilding = false;
         emit();
       }
+      const showOutput = { label: 'Show Output', run: () => actions.setBottomPanelTab('build') };
+      if (globalState.buildStatus === 'SUCCESS') {
+        actions.notify('info', `Build succeeded in ${(globalState.buildDurationMs / 1000).toFixed(1)}s.`, {
+          source: 'ESP Studio (simulated build)',
+        });
+      } else {
+        actions.notify('error', 'Build failed. See the Output panel for details.', { source: 'ESP Studio', actions: [showOutput] });
+      }
     },
 
     triggerFlash: async () => {
@@ -892,6 +1196,7 @@ export function useWorkspaceStore(): [WorkspaceState, {
       try {
         await flashProvider.flash(globalState.lastArtifact);
         globalState.activeDevice.firmwareVersion = '1.0.6-release';
+        actions.notify('info', `Firmware flashed to ${globalState.activeDevice.deviceId}.`, { source: 'ESP Studio (simulated flash)' });
         if (!globalState.isSerialConnected) {
           await actions.toggleSerialConnection();
         }
@@ -978,9 +1283,10 @@ export function useWorkspaceStore(): [WorkspaceState, {
 
     formatCurrentCode: async () => {
       // Real formatter first (JSON, JS/TS, HTML, CSS); the indenter below is a fallback for C-like code.
-      if (await formatDocumentIn(globalState.activeFilePath)) return;
-      const file = globalState.project.files[globalState.activeFilePath];
-      if (!/\.(c|cc|cpp|h|hpp|ino|java|cs|js|ts|go|rs|kt|dart|php)$/i.test(globalState.activeFilePath)) return;
+      const path = focusedPath(globalState);
+      if (await formatDocumentIn(path)) return;
+      const file = globalState.project.files[path];
+      if (!/\.(c|cc|cpp|h|hpp|ino|java|cs|js|ts|go|rs|kt|dart|php)$/i.test(path)) return;
       if (file && file.content) {
         // Prettier-like indentation & bracket normalization for embedded C/C++
         const lines = file.content.split('\n');
@@ -998,7 +1304,7 @@ export function useWorkspaceStore(): [WorkspaceState, {
           return result;
         });
 
-        actions.updateFileContent(globalState.activeFilePath, formattedLines.join('\n'));
+        actions.updateFileContent(path, formattedLines.join('\n'));
       }
     },
 
@@ -1010,8 +1316,13 @@ export function useWorkspaceStore(): [WorkspaceState, {
       globalState.openTabs = Object.keys(globalState.project.files);
       globalState.activeFilePath = globalState.openTabs[0] || '';
       globalState.splitFilePath = null;
+      globalState.splitTabs = [];
+      globalState.activeGroup = 0;
       globalState.dirtyFiles = [];
       globalState.languageOverrides = {};
+      globalState.previewTab = null;
+      globalState.navHistory = [];
+      globalState.navIndex = -1;
       resetSavedContent(globalState.project);
       globalState.syncStatus = 'SYNCED';
       saveToLocalStorage(globalState.project);
@@ -1032,8 +1343,13 @@ export function useWorkspaceStore(): [WorkspaceState, {
       globalState.openTabs = Object.keys(files);
       globalState.activeFilePath = globalState.openTabs[0] || '';
       globalState.splitFilePath = null;
+      globalState.splitTabs = [];
+      globalState.activeGroup = 0;
       globalState.dirtyFiles = [];
       globalState.languageOverrides = {};
+      globalState.previewTab = null;
+      globalState.navHistory = [];
+      globalState.navIndex = -1;
       resetSavedContent(globalState.project);
       globalState.syncStatus = 'PENDING';
       globalState.activeNavTab = 'explorer';
@@ -1255,19 +1571,22 @@ void initWiFi() {
       downloadProjectAsZip(globalState.project);
     },
 
+    /** Open `path` in the right editor group and focus it ("Open to the Side"); null closes the split. */
     setSplitFilePath: (path: string | null) => {
+      if (!path) return actions.closeSplit();
+      if (!globalState.splitTabs.includes(path)) globalState.splitTabs = [...globalState.splitTabs, path];
       globalState.splitFilePath = path;
+      globalState.activeGroup = 1;
+      recordNavigation(path);
+      showEditor();
       emit();
     },
 
+    /** Split Editor (Ctrl+\): show the focused file in a new right group, like VS Code; again closes it. */
     toggleSplitEditor: () => {
-      if (globalState.splitFilePath) {
-        globalState.splitFilePath = null;
-      } else {
-        const otherTab = globalState.openTabs.find((t) => t !== globalState.activeFilePath) || Object.keys(globalState.project.files)[1] || 'platformio.ini';
-        globalState.splitFilePath = otherTab;
-      }
-      emit();
+      if (globalState.splitFilePath) return actions.closeSplit();
+      const path = globalState.activeFilePath;
+      if (path) actions.setSplitFilePath(path);
     },
   };
 

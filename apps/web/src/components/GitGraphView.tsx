@@ -35,7 +35,7 @@ export const GitGraphView: React.FC = () => {
             <span className="text-[#8b949e]">Branch:</span>
             <select
               value={state.currentBranch}
-              onChange={(e) => alert(`Switched to branch: ${e.target.value}`)}
+              onChange={(e) => actions.notify('info', `Branch switching is simulated: '${e.target.value}' was not checked out.`)}
               className="bg-[#161b22] text-white border border-[#30363d] px-2.5 py-1 rounded-lg text-xs outline-none cursor-pointer"
             >
               {state.gitBranches.map((b) => (
@@ -151,7 +151,7 @@ export const GitGraphView: React.FC = () => {
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      alert(`Viewing diff for commit: ${node.hash}`);
+                      actions.notify('info', `Commit diffs are not available yet (sample history, commit ${node.hash}).`);
                     }}
                     className="p-1 hover:text-white text-[#8b949e] rounded"
                     title="Inspect Commit Diff"

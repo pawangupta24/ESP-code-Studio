@@ -68,7 +68,9 @@ export interface EditorCustomization {
   showBreadcrumbs: boolean;
   showTabs: boolean;
   treeIndent: number;
+  enablePreview: boolean;
   confirmDelete: boolean;
+  autoReveal: boolean;
   // ESP32
   flashSpeed: string;
   flashMode: string;
@@ -140,7 +142,9 @@ export const DEFAULT_EDITOR_SETTINGS: EditorCustomization = {
   showBreadcrumbs: true,
   showTabs: true,
   treeIndent: 14,
+  enablePreview: true,
   confirmDelete: true,
+  autoReveal: true,
   flashSpeed: '80m',
   flashMode: 'qio',
   defaultBaudRate: 115200,
@@ -256,9 +260,11 @@ export const SETTINGS: SettingDef[] = [
   { key: 'showBreadcrumbs', id: 'breadcrumbs.enabled', title: 'Breadcrumbs', description: 'Show the file path above the editor.', category: 'Workbench', section: 'Appearance', type: 'boolean' },
   { key: 'treeIndent', id: 'workbench.tree.indent', title: 'Tree Indent', description: 'Explorer indentation in pixels.', category: 'Workbench', section: 'Appearance', type: 'number', min: 4, max: 40 },
   { key: 'showTabs', id: 'workbench.editor.showTabs', title: 'Show Tabs', description: 'Show open editors as tabs.', category: 'Workbench', section: 'Editor Management', type: 'boolean' },
+  { key: 'enablePreview', id: 'workbench.editor.enablePreview', title: 'Enable Preview', description: 'Single-clicked files open in an italic preview tab that is reused until you edit or double-click it.', category: 'Workbench', section: 'Editor Management', type: 'boolean' },
 
   // ---- Features ----
   { key: 'confirmDelete', id: 'explorer.confirmDelete', title: 'Confirm Delete', description: 'Ask for confirmation before deleting files in the Explorer.', category: 'Features', section: 'Explorer', type: 'boolean' },
+  { key: 'autoReveal', id: 'explorer.autoReveal', title: 'Auto Reveal', description: 'Reveal and select the active file in the Explorer.', category: 'Features', section: 'Explorer', type: 'boolean' },
 
   // ---- ESP32 ----
   { key: 'flashSpeed', id: 'esp32.flash.speed', title: 'SPI Flash Speed', description: 'Flash clock frequency used when flashing.', category: 'ESP32', section: 'Flasher', type: 'enum', options: [{ value: '80m', label: '80 MHz' }, { value: '40m', label: '40 MHz' }, { value: '26m', label: '26 MHz' }, { value: '20m', label: '20 MHz' }] },

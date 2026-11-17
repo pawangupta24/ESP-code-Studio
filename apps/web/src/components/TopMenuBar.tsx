@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { useWorkspaceStore } from '../stores/useWorkspaceStore';
+import { useWorkspaceStore, focusedPath } from '../stores/useWorkspaceStore';
 import { formatShortcut } from '../utils/platform';
 import { runEditorAction } from '../editorBridge';
 import { pickColorTheme, pickLanguageMode, pickNewFileLanguage } from '../quickPicks';
+import { readTextFiles } from '../utils/fileImport';
 import { Check, ChevronRight } from 'lucide-react';
 
 interface MenuItem {
@@ -17,26 +18,8 @@ interface MenuItem {
 
 const SEP: MenuItem = { label: '', separator: true };
 const REPO_URL = 'https://github.com/pawangupta24/ESP-code-Studio';
-
-// Files we never read when opening from disk
-const SKIP_DIRS = /(^|\/)(node_modules|\.git|\.pio|build|dist|target|__pycache__)\//;
-const BINARY_EXT = /\.(png|jpe?g|gif|webp|ico|pdf|zip|gz|7z|bin|elf|exe|dll|so|o|a|woff2?|ttf|mp[34]|wav)$/i;
-const MAX_FILE_BYTES = 2 * 1024 * 1024;
-
-async function readTextFiles(list: FileList, stripRoot: boolean) {
-  const files: Record<string, string> = {};
-  let skipped = 0;
-  for (const f of Array.from(list)) {
-    const rel = (f as any).webkitRelativePath || f.name;
-    const path = stripRoot ? rel.split('/').slice(1).join('/') : f.name;
-    if (!path || SKIP_DIRS.test(rel) || BINARY_EXT.test(path) || f.size > MAX_FILE_BYTES) {
-      skipped++;
-      continue;
-    }
-    files[path] = await f.text();
-  }
-  return { files, skipped };
-}
+// A folder picked from disk arrives as "folderName/sub/file"; drop the folder name
+const pathInFolder = (f: File) => ((f as any).webkitRelativePath || f.name).split('/').slice(1).join('/');
 
 export const TopMenuBar: React.FC = () => {
   const [state, actions] = useWorkspaceStore();
@@ -49,6 +32,8 @@ export const TopMenuBar: React.FC = () => {
   const folderInputRef = useRef<HTMLInputElement>(null);
 
   const s = state.editorSettings;
+  const current = focusedPath(state); // file in the focused editor group
+  const currentGroup: 0 | 1 = state.activeGroup === 1 && state.splitFilePath ? 1 : 0;
   const edit = (id: string) => () => runEditorAction(id);
   const toggle = (key: keyof typeof s) => () => actions.setEditorSettings({ [key]: !s[key] });
   const showPanel = (tab: typeof state.bottomPanelTab) => () => actions.setBottomPanelTab(tab);
@@ -57,41 +42,79 @@ export const TopMenuBar: React.FC = () => {
     actions.setActiveNavTab(v === 'extensions' ? 'extensions' : 'explorer');
   };
   const nextEditor = (delta: number) => () => {
-    const tabs = state.openTabs;
-    if (tabs.length > 1) actions.setActiveFilePath(tabs[(tabs.indexOf(state.activeFilePath) + delta + tabs.length) % tabs.length]);
+    const tabs = currentGroup === 1 ? state.splitTabs : state.openTabs;
+    if (tabs.length > 1) actions.openFile(tabs[(tabs.indexOf(current) + delta + tabs.length) % tabs.length]);
   };
 
-  const handleNewFolder = () => {
-    const folder = prompt('New folder name (e.g. include/drivers):')?.trim();
-    if (folder) actions.createFile(`${folder}/.gitkeep`, '');
+  const pathExists = (p: string) =>
+    !!state.project.files[p] || Object.keys(state.project.files).some((f) => f.startsWith(p + '/'));
+
+  const handleNewFolder = async () => {
+    const folder = (
+      await actions.showInputBox({
+        prompt: 'Folder name',
+        placeholder: 'e.g. include/drivers',
+        value: '',
+        validate: (v) => (!v.trim() ? null : pathExists(v.trim()) ? `A file or folder ${v.trim()} already exists.` : null),
+      })
+    )?.trim();
+    if (folder) {
+      actions.createFile(`${folder}/.gitkeep`, '', false);
+      actions.setSidebarView('explorer');
+    }
   };
 
-  const handleSaveAs = () => {
-    const current = state.project.files[state.activeFilePath];
-    if (!current) return;
-    const target = prompt('Save a copy as:', state.activeFilePath)?.trim();
-    if (!target || target === state.activeFilePath) return;
-    if (state.project.files[target]) return alert(`"${target}" already exists.`);
-    actions.createFile(target, current.content);
+  const handleSaveAs = async () => {
+    const file = state.project.files[current];
+    if (!file) return;
+    const target = (
+      await actions.showInputBox({
+        prompt: 'Save a copy of the file as',
+        value: current,
+        selectBaseName: true,
+        validate: (v) => (v.trim() && v.trim() !== current && state.project.files[v.trim()] ? `${v.trim()} already exists.` : null),
+      })
+    )?.trim();
+    if (target && target !== current) actions.createFile(target, file.content);
   };
 
   const onFilesPicked = async (e: React.ChangeEvent<HTMLInputElement>, asFolder: boolean) => {
     const input = e.target;
     if (!input.files?.length) return;
-    const { files, skipped } = await readTextFiles(input.files, asFolder);
+    const picked = Array.from(input.files);
     input.value = '';
+    const { files, skipped } = await readTextFiles(picked, asFolder ? pathInFolder : (f) => f.name);
     const count = Object.keys(files).length;
-    if (count === 0) return alert('No text files to open (binary files, build folders and files over 2 MB are skipped).');
+    if (count === 0) {
+      actions.notify('warning', 'No text files to open. Binary files, build folders and files over 2 MB are skipped.');
+      return;
+    }
     if (asFolder) {
-      const root = ((input.files[0] as any).webkitRelativePath || 'workspace').split('/')[0];
-      if (!confirm(`Open folder "${root}" (${count} files${skipped ? `, ${skipped} skipped` : ''})? This replaces the current workspace. Export a ZIP first if you want to keep it.`)) return;
-      actions.importFiles(files, root);
+      const root = ((picked[0] as any).webkitRelativePath || 'workspace').split('/')[0];
+      const choice = await actions.showDialog({
+        severity: 'warning',
+        message: `Open folder '${root}'?`,
+        detail: `${count} file(s)${skipped ? `, ${skipped} skipped` : ''}. This replaces the current workspace; export it as a ZIP first if you want to keep it.`,
+        buttons: ['Open Folder', 'Cancel'],
+      });
+      if (choice === 0) actions.importFiles(files, root);
     } else {
       const existing = Object.keys(files).filter((p) => state.project.files[p]);
-      if (existing.length && !confirm(`Overwrite ${existing.join(', ')} in the workspace?`)) return;
+      if (existing.length) {
+        const choice = await actions.showDialog({
+          severity: 'warning',
+          message: existing.length === 1 ? `Replace '${existing[0]}'?` : `Replace ${existing.length} existing files?`,
+          detail: existing.join('\n'),
+          buttons: ['Replace', 'Cancel'],
+        });
+        if (choice !== 0) return;
+      }
       actions.importFiles(files);
     }
+    if (skipped) actions.notify('warning', `${skipped} file(s) skipped (binary, build output or larger than 2 MB).`);
   };
+
+  const recent = state.recentFiles.filter((p) => state.project.files[p]);
 
   const menus: { label: string; items: MenuItem[] }[] = [
     {
@@ -99,14 +122,20 @@ export const TopMenuBar: React.FC = () => {
       items: [
         { label: 'New Text File', shortcut: 'Ctrl+Alt+N', action: () => actions.newUntitledFile() },
         { label: 'New File...', action: () => pickNewFileLanguage(actions) },
-        { label: 'New Folder...', action: handleNewFolder },
+        { label: 'New Folder...', action: () => void handleNewFolder() },
         SEP,
         { label: 'Open File...', shortcut: 'Ctrl+O', action: () => fileInputRef.current?.click() },
         { label: 'Open Folder...', action: () => folderInputRef.current?.click() },
+        {
+          label: 'Open Recent',
+          submenu: recent.length
+            ? [...recent.map((p) => ({ label: p, action: () => actions.openFile(p) })), SEP, { label: 'Clear Recently Opened', action: () => actions.clearRecentFiles() }]
+            : [{ label: 'No recent files', disabled: true }],
+        },
         { label: 'Go to File...', shortcut: 'Ctrl+P', action: () => actions.setCommandPaletteOpen(true, '') },
         SEP,
-        { label: 'Save', shortcut: 'Ctrl+S', action: () => actions.saveFile(), disabled: !state.activeFilePath },
-        { label: 'Save As...', action: handleSaveAs, disabled: !state.activeFilePath },
+        { label: 'Save', shortcut: 'Ctrl+S', action: () => actions.saveFile(), disabled: !state.project.files[current] },
+        { label: 'Save As...', action: () => void handleSaveAs(), disabled: !state.project.files[current] },
         { label: 'Save All', shortcut: 'Ctrl+Shift+S', action: actions.saveAllFiles, disabled: state.dirtyFiles.length === 0 },
         SEP,
         { label: 'Auto Save', checked: s.autoSave === 'afterDelay', action: () => actions.setEditorSettings({ autoSave: s.autoSave === 'off' ? 'afterDelay' : 'off' }) },
@@ -121,8 +150,8 @@ export const TopMenuBar: React.FC = () => {
           ],
         },
         SEP,
-        { label: 'Revert File', action: () => actions.revertFile(), disabled: !state.dirtyFiles.includes(state.activeFilePath) },
-        { label: 'Close Editor', shortcut: 'Ctrl+W', action: () => actions.closeTab(state.activeFilePath), disabled: !state.activeFilePath },
+        { label: 'Revert File', action: () => actions.revertFile(), disabled: !state.dirtyFiles.includes(current) },
+        { label: 'Close Editor', shortcut: 'Ctrl+W', action: () => void actions.requestCloseTabs([current], currentGroup), disabled: !current },
         { label: 'Close All Editors', action: actions.closeAllTabs, disabled: state.openTabs.length === 0 },
         SEP,
         { label: 'Export Project as ZIP...', action: actions.exportProjectZip },
@@ -147,7 +176,7 @@ export const TopMenuBar: React.FC = () => {
         { label: 'Toggle Block Comment', shortcut: 'Shift+Alt+A', action: edit('editor.action.blockComment') },
         SEP,
         { label: 'Format Document', shortcut: 'Shift+Alt+F', action: () => void actions.formatCurrentCode() },
-        { label: 'Change Language Mode...', shortcut: 'Ctrl+K M', action: () => pickLanguageMode(state, actions), disabled: !state.activeFilePath },
+        { label: 'Change Language Mode...', shortcut: 'Ctrl+K M', action: () => pickLanguageMode(state, actions), disabled: !state.project.files[current] },
       ],
     },
     {
@@ -226,6 +255,19 @@ export const TopMenuBar: React.FC = () => {
       label: 'Go',
       items: [
         {
+          label: 'Back',
+          shortcut: 'Alt+Left',
+          action: actions.goBack,
+          disabled: state.navIndex <= 0,
+        },
+        {
+          label: 'Forward',
+          shortcut: 'Alt+Right',
+          action: actions.goForward,
+          disabled: state.navIndex >= state.navHistory.length - 1,
+        },
+        SEP,
+        {
           label: 'Switch Editor',
           submenu: [
             { label: 'Next Editor', shortcut: 'Ctrl+PageDown', action: nextEditor(1) },
@@ -284,7 +326,8 @@ export const TopMenuBar: React.FC = () => {
     {
       label: 'Help',
       items: [
-        { label: 'Welcome Tour', action: () => actions.setTourOpen(true) },
+        { label: 'Welcome', action: actions.openWelcome },
+        { label: 'Feature Tour', action: () => actions.setTourOpen(true) },
         { label: 'Show All Commands', shortcut: 'Ctrl+Shift+P', action: () => actions.setCommandPaletteOpen(true) },
         { label: 'Documentation', action: () => window.open(`${REPO_URL}#readme`, '_blank', 'noopener') },
         { label: 'Keyboard Shortcuts Reference', shortcut: 'Ctrl+K Ctrl+S', action: () => actions.openSettings('keybindings') },
@@ -294,7 +337,14 @@ export const TopMenuBar: React.FC = () => {
         SEP,
         {
           label: 'About',
-          action: () => alert('ESP Studio v0.1.0\nVS Code-style IDE for ESP32 / ESP32-S3\nEditor: Monaco 0.45\nLicense: Apache-2.0'),
+          action: () =>
+            void actions.showDialog({
+              message: 'ESP Studio',
+              detail: `Version: 0.1.0\nEditor: Monaco 0.45\nBrowser: ${navigator.userAgent.match(/(Chrome|Edg|Firefox|Safari)\/[\d.]+/)?.[0] ?? 'unknown'}\nLicense: Apache-2.0`,
+              buttons: ['Copy', 'OK'],
+            }).then((i) => {
+              if (i === 0) void navigator.clipboard.writeText('ESP Studio 0.1.0 (Monaco 0.45)');
+            }),
         },
       ],
     },
@@ -331,8 +381,13 @@ export const TopMenuBar: React.FC = () => {
   // Ctrl+O from the global shortcut handler
   useEffect(() => {
     const openFile = () => fileInputRef.current?.click();
+    const openFolder = () => folderInputRef.current?.click();
     window.addEventListener('esp-studio:open-file', openFile);
-    return () => window.removeEventListener('esp-studio:open-file', openFile);
+    window.addEventListener('esp-studio:open-folder', openFolder);
+    return () => {
+      window.removeEventListener('esp-studio:open-file', openFile);
+      window.removeEventListener('esp-studio:open-folder', openFolder);
+    };
   }, []);
 
   // Close on outside click; keyboard navigation while open; Alt+<letter> opens a menu

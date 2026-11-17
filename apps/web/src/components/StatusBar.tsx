@@ -1,34 +1,35 @@
 import React from 'react';
-import { useWorkspaceStore } from '../stores/useWorkspaceStore';
+import { useWorkspaceStore, focusedPath } from '../stores/useWorkspaceStore';
 import { THEME_PALETTES } from '../themeTokens';
 import { getDefaultSerialPort } from '../utils/platform';
-import { runEditorAction } from '../editorBridge';
+import { runEditorAction, setEndOfLine } from '../editorBridge';
 import { detectLanguage, languageName } from '../languages';
 import { pickColorTheme, pickLanguageMode, pickTabSize } from '../quickPicks';
-import {
-  GitBranch,
-  AlertCircle,
-  AlertTriangle,
-  Cpu,
-  Cloud,
-  Laptop,
-  Check,
-} from 'lucide-react';
+import { GitBranch, AlertCircle, AlertTriangle, Cpu, Cloud, Laptop, Bell, BellDot, ZoomIn, Loader2 } from 'lucide-react';
 
-interface StatusBarProps {
-  cursorLine?: number;
-  cursorCol?: number;
-}
-
-export const StatusBar: React.FC<StatusBarProps> = ({ cursorLine = 1, cursorCol = 1 }) => {
+export const StatusBar: React.FC = () => {
   const [state, actions] = useWorkspaceStore();
   const palette = THEME_PALETTES[state.theme] || THEME_PALETTES['github-dark'];
 
   const errorCount = state.codeDiagnostics.filter((d) => d.severity === 'error').length;
   const warningCount = state.codeDiagnostics.filter((d) => d.severity === 'warning').length;
 
-  const path = state.activeFilePath;
-  const languageLabel = path ? languageName(detectLanguage(path, state.languageOverrides[path])) : '';
+  const path = focusedPath(state);
+  const file = state.project.files[path];
+  const languageLabel = file ? languageName(detectLanguage(path, state.languageOverrides[path])) : '';
+  const eol = file?.content.includes('\r\n') ? 'CRLF' : 'LF';
+  const { line, col, selected } = state.cursor;
+  const unread = state.notifications.length;
+
+  const pickEol = () =>
+    actions.showQuickPick({
+      placeholder: 'Select End of Line Sequence',
+      items: [
+        { id: 'LF', label: 'LF', detail: 'Unix / macOS', current: eol === 'LF' },
+        { id: 'CRLF', label: 'CRLF', detail: 'Windows', current: eol === 'CRLF' },
+      ],
+      onPick: (id) => setEndOfLine(path, id === 'CRLF'),
+    });
 
   return (
     <div
@@ -90,30 +91,41 @@ export const StatusBar: React.FC<StatusBarProps> = ({ cursorLine = 1, cursorCol 
         </div>
       </div>
 
-      {/* Right: Line/Col, Spaces, UTF-8, LF, Language, Theme, Ready */}
+      {/* Right: progress, zoom, Line/Col, Spaces, UTF-8, EOL, Language, Theme, notifications */}
       <div className="flex items-center space-x-2 sm:space-x-3 flex-shrink-0">
-        {/* Cursor Position */}
-        <button
-          onClick={() => runEditorAction('editor.action.gotoLine')}
-          className="text-white hover:underline"
-          title="Go to Line/Column (Ctrl+G)"
-        >
-          Ln {cursorLine}, Col {cursorCol}
-        </button>
+        {/* Long-running work, like VS Code's progress item */}
+        {(state.isBuilding || state.isFlashing) && (
+          <button onClick={() => actions.setBottomPanelTab(state.isBuilding ? 'build' : 'serial')} className="flex items-center gap-1 text-white">
+            <Loader2 className="w-3 h-3 animate-spin" />
+            <span>{state.isBuilding ? 'Building...' : `Flashing ${state.flashProgress?.percentage ?? 0}%`}</span>
+          </button>
+        )}
 
-        {/* Indentation */}
-        <button onClick={() => pickTabSize(state, actions)} className="hidden md:inline hover:text-white" title="Select Indentation">
-          Spaces: {state.editorSettings.tabSize}
-        </button>
+        {state.zoomLevel !== 100 && (
+          <button onClick={actions.resetZoom} className="flex items-center gap-1 hover:text-white" title="Reset Zoom (Ctrl+0)">
+            <ZoomIn className="w-3 h-3" />
+            <span>{state.zoomLevel}%</span>
+          </button>
+        )}
 
-        {/* Encoding */}
-        <span className="hidden md:inline">UTF-8</span>
-
-        {/* Line Endings */}
-        <span className="hidden md:inline">LF</span>
+        {file && (
+          <>
+            <button onClick={() => runEditorAction('editor.action.gotoLine')} className="text-white hover:underline" title="Go to Line/Column (Ctrl+G)">
+              Ln {line}, Col {col}
+              {selected > 0 && ` (${selected} selected)`}
+            </button>
+            <button onClick={() => pickTabSize(state, actions)} className="hidden md:inline hover:text-white" title="Select Indentation">
+              Spaces: {state.editorSettings.tabSize}
+            </button>
+            <span className="hidden md:inline">UTF-8</span>
+            <button onClick={pickEol} className="hidden md:inline hover:text-white" title="Select End of Line Sequence">
+              {eol}
+            </button>
+          </>
+        )}
 
         {/* Language Mode */}
-        {path && (
+        {file && (
           <button
             onClick={() => pickLanguageMode(state, actions)}
             style={{ color: palette.accent }}
@@ -129,11 +141,14 @@ export const StatusBar: React.FC<StatusBarProps> = ({ cursorLine = 1, cursorCol 
           {palette.name}
         </button>
 
-        {/* Ready Badge */}
-        <span className="text-emerald-400 hidden sm:flex items-center space-x-1">
-          <Check className="w-3 h-3" />
-          <span>Ready</span>
-        </span>
+        {/* Notification center bell */}
+        <button
+          onClick={() => actions.setNotificationCenterOpen(!state.isNotificationCenterOpen)}
+          className="hover:text-white"
+          title={unread ? `${unread} notification(s)` : 'No Notifications'}
+        >
+          {unread ? <BellDot className="w-3.5 h-3.5 text-white" /> : <Bell className="w-3.5 h-3.5" />}
+        </button>
       </div>
     </div>
   );

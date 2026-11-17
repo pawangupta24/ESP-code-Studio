@@ -54,13 +54,42 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
   - **File**: New Text File, New File (pick a language), Open File and Open Folder from your disk, Save / Save As / Save All, Auto Save, Revert File
   - **View**: Appearance options (Full Screen, Zen Mode, show/hide Side Bar, Activity Bar, Status Bar, Panel, Minimap, Breadcrumbs, Sticky Scroll, Tabs) and Editor Layout
   - **Go**: Go to Symbol, Definition, References and Bracket
-- **Editor tabs**: unsaved-change dots, Save / Save All, middle-click to close, drag to reorder, and a right-click menu (Close, Close Others, Close All, Split Right, Copy Path)
-- **Split editor**, side by side, with a draggable divider
+- **Editor tabs**:
+  - preview tabs: single-click opens an *italic* tab that the next single-click replaces; double-click or edit to keep it
+  - "Do you want to save the changes?" prompt when closing an unsaved file
+  - unsaved dot, middle-click to close, drag to reorder
+  - right-click menu: Close, Close Others, Close to the Right, Close Saved, Close All, Keep Open, Split Right, Copy Path, Reveal in Explorer View
+- **Explorer**:
+  - inline New File / New Folder / Rename (F2) with validation
+  - keyboard navigation (arrows, Enter, Space, F2, Delete) and drag and drop to move files
+  - drop files from your computer to import them; Collapse All
+  - follows the active file; **Outline** section listing functions, classes and headings
+- **Breadcrumbs**: every segment is clickable (folder contents, sibling files, symbols), and the current function is shown
+- **Go to Symbol** (`Ctrl+Shift+O`) and sticky scroll also work for C/C++, Python, Go, Rust, Java, C#, Kotlin, PHP, Ruby, Lua, shell, INI, YAML and Markdown
+- **Workbench**:
+  - notification toasts and a notification center (bell in the status bar)
+  - VS Code-style dialogs and input boxes (no browser pop-ups)
+  - Welcome page and File > Open Recent
+  - Back / Forward (`Alt+Left/Right`)
+  - layout buttons in the title bar
+  - Manage (gear) and Accounts menus
+  - window title with an unsaved marker
+- **Status bar**: selection count, LF/CRLF switch, zoom level, build progress
+- **Drag files** from your computer onto the editor to open them
+- **Split editor** (`Ctrl+\`, or "Open to the Side"): two editor groups, like VS Code
+  - each group has its own tabs, and the focused group's active tab is highlighted
+  - files opened from the Explorer, search or Quick Open go to the focused group
+  - Save, Format, Close, the status bar, breadcrumbs and outline follow the focused group
+  - the same file can be open on both sides (edits stay in sync); closing one copy doesn't ask to save
+  - closing a group's last tab closes the group; draggable divider (double-click to reset)
 - **Quick Open** (`Ctrl+P`):
   - type a file name, or `name:line` to jump straight to a line
   - start with `>` to run commands
   - start with `:` to go to a line in the current file
-- **Find in Files** (`Ctrl+Shift+F`): match case, whole word, regex, highlighted results, click to jump, and Replace All with confirmation
+- **Find in Files** (`Ctrl+Shift+F`):
+  - match case, whole word and regex; files to include / exclude (e.g. `*.cpp, src`)
+  - highlighted results, click to jump, collapse all
+  - Replace All (with confirmation) or replace within one file
 - **Explorer**: file tree, filter, create / rename / delete files and folders, Open to the Side, and export the project as a ZIP
 - **Problems panel**: click an entry to jump to its line
 - **File viewers** for Markdown, JSON, CSV, PDF, images/SVG and firmware hex (`.bin`, `.hex`, `.elf`)
@@ -99,6 +128,7 @@ On macOS, `Ctrl` is `⌘`.
 | `Ctrl+K Ctrl+T` | Color theme |
 | `Ctrl+K Ctrl+S` | Keyboard shortcuts |
 | `Ctrl+K Z` / `Esc` | Enter / leave Zen mode |
+| `Alt+Left` / `Alt+Right` | Go back / forward between files |
 | `F11` | Full screen |
 | `Alt+Z` | Toggle word wrap |
 | `Alt+F`, `Alt+E`, ... | Open a menu (then use the arrow keys) |
@@ -204,7 +234,8 @@ These describe the **planned** system. Some of it (cloud backend, database, real
 
 - Tailwind CSS and Monaco load from CDNs, so the app needs internet access, including the desktop build.
 - All data lives in browser `localStorage`. Clearing site data deletes your project, so use **Export ZIP** to keep a copy.
-- No automated tests yet.
+- Tests: only a self-check for the search-glob and symbol-outline logic (`node apps/web/scripts/check-logic.ts`, Node 22.6+). The UI has no automated tests.
+- The outline uses pattern matching, not a compiler, so unusual formatting (e.g. a function signature split over several lines) can be missed.
 
 ## License
 

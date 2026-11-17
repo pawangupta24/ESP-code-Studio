@@ -124,10 +124,14 @@ export const TemplateGallery: React.FC = () => {
                   </span>
 
                   <button
-                    onClick={() => {
-                      if (confirm(`Load template "${tpl.title}" into active workspace?`)) {
-                        actions.loadTemplateProject(tpl.id, tpl.files);
-                      }
+                    onClick={async () => {
+                      const choice = await actions.showDialog({
+                        severity: 'warning',
+                        message: `Load template '${tpl.title}'?`,
+                        detail: 'This replaces the files in the current workspace. Export a ZIP first if you want to keep them.',
+                        buttons: ['Load Template', 'Cancel'],
+                      });
+                      if (choice === 0) actions.loadTemplateProject(tpl.id, tpl.files);
                     }}
                     className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
                       isCurrent

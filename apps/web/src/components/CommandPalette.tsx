@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useWorkspaceStore } from '../stores/useWorkspaceStore';
+import { useWorkspaceStore, focusedPath } from '../stores/useWorkspaceStore';
 import { runEditorAction, requestReveal } from '../editorBridge';
 import { pickColorTheme, pickLanguageMode, pickNewFileLanguage, pickTabSize } from '../quickPicks';
 import { Check } from 'lucide-react';
@@ -103,7 +103,7 @@ export const CommandPalette: React.FC = () => {
     { id: 'clean', title: 'ESP Studio: Clean Build Outputs', detail: 'Remove the last build artifact and logs', icon: Trash2, run: actions.cleanBuild },
     { id: 'save', title: 'File: Save', detail: 'Save the active file (Ctrl+S)', icon: Save, run: () => actions.saveFile() },
     { id: 'save-all', title: 'File: Save All', detail: 'Save every modified file (Ctrl+Shift+S)', icon: Save, run: actions.saveAllFiles },
-    { id: 'close-editor', title: 'View: Close Editor', detail: 'Close the active tab (Ctrl+W)', icon: X, run: () => actions.closeTab(state.activeFilePath) },
+    { id: 'close-editor', title: 'View: Close Editor', detail: 'Close the active tab (Ctrl+W)', icon: X, run: () => void actions.requestCloseTabs([focusedPath(state)], state.activeGroup === 1 && state.splitFilePath ? 1 : 0) },
     { id: 'close-all', title: 'View: Close All Editors', detail: 'Close every open tab', icon: X, run: actions.closeAllTabs },
     { id: 'split', title: 'View: Toggle Split Editor', detail: 'Open or close the side-by-side editor (Ctrl+\\)', icon: Columns2, run: actions.toggleSplitEditor },
     { id: 'toggle-panel', title: 'View: Toggle Panel', detail: 'Show or hide the bottom panel (Ctrl+J)', icon: PanelBottom, run: () => actions.setBottomPanelTab(state.bottomPanelTab === 'closed' ? 'terminal' : 'closed') },
@@ -189,10 +189,14 @@ export const CommandPalette: React.FC = () => {
       title: 'ESP Studio: Reset to ESP32-S3 Arduino Template',
       detail: 'Re-initialize project workspace to default blink structure',
       icon: RotateCcw,
-      run: () => {
-        if (confirm('Reset the workspace to the Arduino template? All current files will be replaced.')) {
-          actions.resetProjectToTemplate('arduino');
-        }
+      run: async () => {
+        const choice = await actions.showDialog({
+          severity: 'warning',
+          message: 'Reset the workspace to the Arduino template?',
+          detail: 'All current files will be replaced. Export a ZIP first if you want to keep them.',
+          buttons: ['Reset', 'Cancel'],
+        });
+        if (choice === 0) actions.resetProjectToTemplate('arduino');
       },
     },
   ];
@@ -216,7 +220,7 @@ export const CommandPalette: React.FC = () => {
     emptyText = 'No matching commands.';
   } else if (search.startsWith(':')) {
     const line = parseInt(search.slice(1), 10);
-    const path = state.activeFilePath;
+    const path = focusedPath(state);
     items = line > 0 && path
       ? [{ id: 'line', title: `Go to line ${line}`, detail: path, icon: Hash, run: () => requestReveal(path, line) }]
       : [];

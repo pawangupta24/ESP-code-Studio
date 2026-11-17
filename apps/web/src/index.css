@@ -27,6 +27,17 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #484f58;
 }
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Scrollable but without a visible scrollbar (tab strip, toolbars) */
+.scrollbar-none {
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
 
 /* Code Fonts */
 .font-mono {

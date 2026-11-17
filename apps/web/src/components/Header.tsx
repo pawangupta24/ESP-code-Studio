@@ -17,6 +17,11 @@ import {
   MoreVertical,
   HelpCircle,
   Search,
+  ArrowLeft,
+  ArrowRight,
+  PanelLeft,
+  PanelBottom,
+  PanelRight,
 } from 'lucide-react';
 
 export const Header: React.FC = () => {
@@ -68,7 +73,25 @@ export const Header: React.FC = () => {
           </div>
         </div>
 
-        {/* Center: Quick Command / File Bar (VS Code Center Search) */}
+        {/* Center: Back / Forward + command center (like VS Code's title bar) */}
+        <div className="hidden md:flex items-center gap-0.5 mr-1">
+          <button
+            onClick={actions.goBack}
+            disabled={state.navIndex <= 0}
+            title={`Go Back (${formatShortcut('Alt+Left')})`}
+            className="p-1 rounded text-[#c9d1d9] hover:bg-[#21262d] disabled:opacity-30 disabled:hover:bg-transparent"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={actions.goForward}
+            disabled={state.navIndex >= state.navHistory.length - 1}
+            title={`Go Forward (${formatShortcut('Alt+Right')})`}
+            className="p-1 rounded text-[#c9d1d9] hover:bg-[#21262d] disabled:opacity-30 disabled:hover:bg-transparent"
+          >
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
         <div
           onClick={() => actions.setCommandPaletteOpen(true, '')}
           className="hidden md:flex items-center space-x-2 px-3 py-0.5 rounded bg-[#0d1117] border border-[#30363d] hover:border-[#58a6ff] cursor-pointer text-[#8b949e] text-[11px] max-w-sm truncate transition-colors shadow-sm"
@@ -76,15 +99,46 @@ export const Header: React.FC = () => {
         >
           <Search className="w-3 h-3 text-[#58a6ff] flex-shrink-0" />
           <span className="truncate text-white/90">
-            {state.project.metadata.name} <span className="text-[#8b949e]">—</span> {state.activeFilePath}
+            {state.project.metadata.name}
           </span>
           <span className="text-[10px] text-[#8b949e] bg-[#21262d] px-1 py-0.2 rounded font-sans flex-shrink-0">
             {getModifierKey()}+P
           </span>
         </div>
 
-        {/* Right: Cloud Sync, Tour, Account & Responsive Overflow */}
+        {/* Right: layout controls, Cloud Sync, Tour, Account & Responsive Overflow */}
         <div className="flex items-center space-x-1.5 flex-shrink-0">
+          <div className="hidden md:flex items-center gap-0.5 mr-1">
+            {[
+              {
+                title: 'Toggle Primary Side Bar',
+                on: !!state.sidebarView,
+                icon: <PanelLeft className="w-3.5 h-3.5" />,
+                run: () => actions.setSidebarView(state.sidebarView ? '' : 'explorer'),
+              },
+              {
+                title: `Toggle Panel (${formatShortcut('Ctrl+J')})`,
+                on: state.bottomPanelTab !== 'closed',
+                icon: <PanelBottom className="w-3.5 h-3.5" />,
+                run: () => actions.setBottomPanelTab(state.bottomPanelTab === 'closed' ? 'terminal' : 'closed'),
+              },
+              {
+                title: 'Toggle Secondary Side Bar (AI Copilot)',
+                on: state.isAiPanelOpen,
+                icon: <PanelRight className="w-3.5 h-3.5" />,
+                run: actions.toggleAiPanel,
+              },
+            ].map((b) => (
+              <button
+                key={b.title}
+                onClick={b.run}
+                title={b.title}
+                className={`p-1 rounded hover:bg-[#21262d] ${b.on ? 'text-white' : 'text-[#8b949e]'}`}
+              >
+                {b.icon}
+              </button>
+            ))}
+          </div>
           {/* Cloud Sync Status */}
           <button
             onClick={() => actions.setSyncModalOpen(true)}

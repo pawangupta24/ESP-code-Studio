@@ -1,4 +1,5 @@
 // VS Code-style pickers shared by the menus, command palette and status bar.
+import { focusedPath } from './stores/useWorkspaceStore';
 import type { WorkspaceState, useWorkspaceStore } from './stores/useWorkspaceStore';
 import { allLanguages, detectLanguage, languageName } from './languages';
 import { availableThemes } from './extensionsCatalog';
@@ -7,8 +8,8 @@ import { THEME_PALETTES } from './themeTokens';
 type Actions = ReturnType<typeof useWorkspaceStore>[1];
 
 export function pickLanguageMode(state: WorkspaceState, actions: Actions) {
-  const path = state.activeFilePath;
-  if (!path) return;
+  const path = focusedPath(state);
+  if (!state.project.files[path]) return;
   const auto = detectLanguage(path);
   const current = detectLanguage(path, state.languageOverrides[path]);
   actions.showQuickPick({

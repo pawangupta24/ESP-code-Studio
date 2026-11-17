@@ -3,6 +3,8 @@ import { useWorkspaceStore } from '../stores/useWorkspaceStore';
 import { Search, Replace } from 'lucide-react';
 import { FileIcon } from './FileIcon';
 import { requestReveal } from '../editorBridge';
+import { compileGlobs } from '../utils/glob';
+import { ChevronsDownUp, ChevronsUpDown, MoreHorizontal, ReplaceAll } from 'lucide-react';
 
 interface SearchOptions {
   matchCase: boolean;
@@ -36,15 +38,21 @@ export const SearchSidebar: React.FC = () => {
   const [isReplaceOpen, setIsReplaceOpen] = useState(false);
   const [opts, setOpts] = useState<SearchOptions>({ matchCase: false, wholeWord: false, useRegex: false });
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [showDetails, setShowDetails] = useState(false);
+  const [include, setInclude] = useState('');
+  const [exclude, setExclude] = useState('');
 
   const regex = query ? buildSearchRegex(query, opts) : null;
   const regexError = typeof regex === 'string' ? regex : null;
+  const includes = compileGlobs(include);
+  const excludes = compileGlobs(exclude);
 
   // Find matches across all files
   const searchResults: { filePath: string; matches: Match[] }[] = [];
   if (regex instanceof RegExp) {
     Object.entries(state.project.files).forEach(([path, file]) => {
       if (file.isBinary) return;
+      if ((includes && !includes(path)) || excludes?.(path)) return;
       const matches: Match[] = [];
       file.content.split('\n').forEach((lineText, idx) => {
         regex.lastIndex = 0;
@@ -67,21 +75,31 @@ export const SearchSidebar: React.FC = () => {
 
   const totalMatches = searchResults.reduce((acc, r) => acc + r.matches.length, 0);
 
-  const handleReplaceAll = () => {
-    if (!(regex instanceof RegExp) || totalMatches === 0) return;
-    if (!confirm(`Replace matches in ${searchResults.length} file(s) with "${replaceText}"?`)) return;
-    searchResults.forEach(({ filePath }) => {
-      const content = state.project.files[filePath].content;
-      // Literal mode: escape "$" so "$1"/"$&" in the replacement are not treated as group references
-      const replacement = opts.useRegex ? replaceText : replaceText.replace(/\$/g, '$$$$');
-      actions.updateFileContent(filePath, content.replace(regex, replacement));
-    });
+  const replaceIn = (paths: string[]) => {
+    if (!(regex instanceof RegExp)) return;
+    // Literal mode: escape "$" so "$1"/"$&" in the replacement are not treated as group references
+    const replacement = opts.useRegex ? replaceText : replaceText.replace(/\$/g, '$$$$');
+    paths.forEach((p) => actions.updateFileContent(p, state.project.files[p].content.replace(regex, replacement)));
   };
 
+  const handleReplaceAll = async () => {
+    if (!(regex instanceof RegExp) || totalMatches === 0) return;
+    const choice = await actions.showDialog({
+      severity: 'warning',
+      message: `Replace ${totalMatches} occurrence(s) across ${searchResults.length} file(s) with '${replaceText}'?`,
+      detail: 'You can undo this in each file with Ctrl+Z.',
+      buttons: ['Replace', 'Cancel'],
+    });
+    if (choice === 0) replaceIn(searchResults.map((r) => r.filePath));
+  };
+
+  // Single-click opens a preview tab, like VS Code's search results
   const openMatch = (filePath: string, m?: Match) => {
-    actions.setActiveFilePath(filePath);
+    actions.openFile(filePath, { preview: true });
     if (m) requestReveal(filePath, m.line, m.col);
   };
+
+  const allCollapsed = searchResults.length > 0 && searchResults.every((r) => collapsed[r.filePath]);
 
   const toggle = (key: keyof SearchOptions, label: string, title: string) => (
     <button
@@ -106,6 +124,14 @@ export const SearchSidebar: React.FC = () => {
           title="Toggle Replace"
         >
           <Replace className="w-3.5 h-3.5" />
+        </button>
+        <button
+          onClick={() => setCollapsed(allCollapsed ? {} : Object.fromEntries(searchResults.map((r) => [r.filePath, true])))}
+          disabled={searchResults.length === 0}
+          className="p-1 rounded hover:bg-[#21262d] text-[#8b949e] disabled:opacity-30"
+          title={allCollapsed ? 'Expand All' : 'Collapse All'}
+        >
+          {allCollapsed ? <ChevronsUpDown className="w-3.5 h-3.5" /> : <ChevronsDownUp className="w-3.5 h-3.5" />}
         </button>
       </div>
 
@@ -143,12 +169,40 @@ export const SearchSidebar: React.FC = () => {
               />
             </div>
             <button
-              onClick={handleReplaceAll}
+              onClick={() => void handleReplaceAll()}
               disabled={totalMatches === 0}
               className="w-full py-1 rounded bg-[#21262d] hover:bg-[#30363d] text-[#58a6ff] border border-[#30363d] text-[10px] font-semibold disabled:opacity-40"
             >
               Replace All ({totalMatches})
             </button>
+          </div>
+        )}
+
+        <div className="flex justify-end">
+          <button onClick={() => setShowDetails(!showDetails)} title="Toggle Search Details" className="p-0.5 rounded text-[#8b949e] hover:text-white hover:bg-[#21262d]">
+            <MoreHorizontal className="w-3.5 h-3.5" />
+          </button>
+        </div>
+        {showDetails && (
+          <div className="space-y-1.5">
+            <label className="block text-[10px] text-[#8b949e]">
+              files to include
+              <input
+                value={include}
+                onChange={(e) => setInclude(e.target.value)}
+                placeholder="e.g. *.cpp, src"
+                className="mt-0.5 w-full bg-[#0d1117] border border-[#30363d] focus:border-[#58a6ff] px-2 py-1 rounded text-white text-xs outline-none placeholder-[#484f58]"
+              />
+            </label>
+            <label className="block text-[10px] text-[#8b949e]">
+              files to exclude
+              <input
+                value={exclude}
+                onChange={(e) => setExclude(e.target.value)}
+                placeholder="e.g. *.md, include/**"
+                className="mt-0.5 w-full bg-[#0d1117] border border-[#30363d] focus:border-[#58a6ff] px-2 py-1 rounded text-white text-xs outline-none placeholder-[#484f58]"
+              />
+            </label>
           </div>
         )}
 
@@ -171,15 +225,28 @@ export const SearchSidebar: React.FC = () => {
                 onClick={() => setCollapsed({ ...collapsed, [res.filePath]: !collapsed[res.filePath] })}
                 onDoubleClick={() => openMatch(res.filePath)}
                 title={res.filePath}
-                className="flex items-center justify-between px-2 py-1 cursor-pointer hover:bg-[#21262d] rounded text-white font-semibold text-[11px]"
+                className="group flex items-center justify-between px-2 py-1 cursor-pointer hover:bg-[#21262d] rounded text-white font-semibold text-[11px]"
               >
                 <div className="flex items-center space-x-1.5 truncate">
                   <FileIcon filename={fileName} className="w-3.5 h-3.5" />
-                  <span className="truncate">{res.filePath}</span>
+                  <span className="truncate">{fileName}</span>
+                  <span className="truncate font-normal text-[10px] text-[#8b949e]">{res.filePath.includes('/') ? res.filePath.slice(0, res.filePath.lastIndexOf('/')) : ''}</span>
                 </div>
-                <span className="text-[10px] px-1 rounded-full bg-[#0d1117] text-[#8b949e]">
-                  {res.matches.length}
-                </span>
+                <div className="flex items-center gap-1">
+                  {isReplaceOpen && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        replaceIn([res.filePath]);
+                      }}
+                      title="Replace All in This File"
+                      className="hidden group-hover:block p-0.5 rounded hover:bg-[#30363d] text-[#8b949e] hover:text-white"
+                    >
+                      <ReplaceAll className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                  <span className="text-[10px] px-1.5 rounded-full bg-[#30363d] text-[#c9d1d9]">{res.matches.length}</span>
+                </div>
               </div>
 
               {!collapsed[res.filePath] && (

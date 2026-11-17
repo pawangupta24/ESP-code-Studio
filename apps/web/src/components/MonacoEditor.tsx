@@ -1,10 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useWorkspaceStore } from '../stores/useWorkspaceStore';
 import { THEME_PALETTES } from '../themeTokens';
-import { setPrimaryEditor, setFocusedEditor, releaseEditor } from '../editorBridge';
+import { setEditorPath, setFocusedEditor, releaseEditor } from '../editorBridge';
 import { detectLanguage } from '../languages';
 import { toMonacoOptions } from '../settingsSchema';
-import { syncExtensionContributions } from '../extensionHost';
+import { syncExtensionContributions, registerSymbolProviders } from '../extensionHost';
 
 declare global {
   interface Window {
@@ -47,6 +47,8 @@ export const MonacoEditor: React.FC<MonacoEditorProps> = ({ filePath, content, o
   const syncingRef = useRef(false);
   const cursorCbRef = useRef(onCursorChange);
   cursorCbRef.current = onCursorChange;
+  const isPrimaryRef = useRef(isPrimary);
+  isPrimaryRef.current = isPrimary;
   const [isMonacoReady, setIsMonacoReady] = useState(!!window.monaco);
   const palette = THEME_PALETTES[state.theme] || THEME_PALETTES['github-dark'];
   const settings = state.editorSettings;
@@ -85,15 +87,27 @@ export const MonacoEditor: React.FC<MonacoEditorProps> = ({ filePath, content, o
     });
     editorRef.current = editor;
 
-    editor.onDidChangeCursorPosition((e: any) => {
-      cursorCbRef.current?.(e.position.lineNumber, e.position.column);
+    // Cursor + selection size of the primary editor feed the status bar, breadcrumbs and outline
+    editor.onDidChangeCursorSelection(() => {
+      const sel = editor.getSelection();
+      const model = editor.getModel();
+      if (!sel || !model) return;
+      cursorCbRef.current?.(sel.positionLineNumber, sel.positionColumn);
+      // Only the focused editor group drives the status bar / breadcrumbs / outline
+      if (editor.hasTextFocus()) actions.setCursor(sel.positionLineNumber, sel.positionColumn, model.getValueLengthInRange(sel));
     });
     editor.onDidChangeModelContent(() => {
       // Skip echo of our own setValue, and always write to the file this model belongs to.
       if (syncingRef.current) return;
       actions.updateFileContent(pathRef.current, editor.getValue());
     });
-    editor.onDidFocusEditorText(() => setFocusedEditor(editor));
+    editor.onDidFocusEditorText(() => {
+      setFocusedEditor(editor);
+      actions.setActiveGroup(isPrimaryRef.current ? 0 : 1);
+      const sel = editor.getSelection();
+      const model = editor.getModel();
+      if (sel && model) actions.setCursor(sel.positionLineNumber, sel.positionColumn, model.getValueLengthInRange(sel));
+    });
 
     // Our Ctrl+K chords must go through Monaco's own keybinding service while the editor has
     // focus; otherwise Monaco keeps waiting for a chord key and swallows the next keystroke.
@@ -135,12 +149,14 @@ export const MonacoEditor: React.FC<MonacoEditorProps> = ({ filePath, content, o
       model.pushEditOperations([], [{ range: model.getFullModelRange(), text: content }], () => null);
       syncingRef.current = false;
     }
-    if (isPrimary) setPrimaryEditor(editor, filePath);
+    setEditorPath(editor, filePath);
   }, [isMonacoReady, filePath, content, isPrimary, language]);
 
   // Snippets contributed by enabled extensions
   useEffect(() => {
-    if (isMonacoReady) syncExtensionContributions(state.extensions);
+    if (!isMonacoReady) return;
+    registerSymbolProviders();
+    syncExtensionContributions(state.extensions);
   }, [isMonacoReady, state.extensions]);
 
   // Indentation settings apply to every open file unless auto-detected per file

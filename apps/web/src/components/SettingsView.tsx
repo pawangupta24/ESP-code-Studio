@@ -252,8 +252,13 @@ export const SettingsView: React.FC = () => {
             <span className="hidden sm:inline">{viewMode === 'ui' ? 'Open settings.json' : 'Open Settings UI'}</span>
           </button>
           <button
-            onClick={() => {
-              if (confirm('Reset all settings to their defaults?')) actions.resetEditorSettings();
+            onClick={async () => {
+              const choice = await actions.showDialog({
+                severity: 'warning',
+                message: 'Reset all settings to their defaults?',
+                buttons: ['Reset All', 'Cancel'],
+              });
+              if (choice === 0) actions.resetEditorSettings();
             }}
             className="px-2 py-1 rounded bg-[#21262d] hover:bg-[#30363d] text-[#8b949e] hover:text-rose-400 border border-[#30363d] flex items-center gap-1"
           >

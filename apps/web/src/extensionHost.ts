@@ -1,5 +1,42 @@
 // Applies what enabled extensions contribute to the live Monaco instance.
 import type { ExtensionItem } from './extensionsCatalog';
+import { extractSymbols, SYMBOL_LANGUAGES, DocSymbol } from './symbols';
+
+let symbolsRegistered = false;
+
+/**
+ * Document symbols for languages Monaco has no provider for. Powers Go to Symbol
+ * (Ctrl+Shift+O), sticky scroll and outline-based folding in the editor. Registered once.
+ */
+export function registerSymbolProviders() {
+  const monaco = (window as any).monaco;
+  if (!monaco || symbolsRegistered) return;
+  symbolsRegistered = true;
+  const K = monaco.languages.SymbolKind;
+  const kinds: Record<DocSymbol['kind'], number> = {
+    function: K.Function, method: K.Method, class: K.Class, struct: K.Struct, enum: K.Enum,
+    interface: K.Interface, namespace: K.Namespace, module: K.Module, heading: K.String, section: K.Namespace,
+  };
+  const toMonaco = (s: DocSymbol, model: any): any => ({
+    name: s.name,
+    detail: '',
+    kind: kinds[s.kind],
+    tags: [],
+    range: {
+      startLineNumber: s.line,
+      startColumn: 1,
+      endLineNumber: Math.min(s.endLine, model.getLineCount()),
+      endColumn: model.getLineMaxColumn(Math.min(s.endLine, model.getLineCount())),
+    },
+    selectionRange: { startLineNumber: s.line, startColumn: 1, endLineNumber: s.line, endColumn: model.getLineMaxColumn(s.line) },
+    children: s.children.map((c) => toMonaco(c, model)),
+  });
+  for (const lang of SYMBOL_LANGUAGES) {
+    monaco.languages.registerDocumentSymbolProvider(lang, {
+      provideDocumentSymbols: (model: any) => extractSymbols(model.getValue(), lang).map((s) => toMonaco(s, model)),
+    });
+  }
+}
 
 let registered: { dispose(): void }[] = [];
 let lastKey = '';
